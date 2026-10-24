@@ -1,0 +1,258 @@
+// Copyright (c) 2026 Canonical Ltd
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 3 as
+// published by the Free Software Foundation.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+// Package openrouter implements the model roles against the OpenRouter API
+// (and, for embeddings and chat, any OpenAI compatible endpoint).
+package openrouter
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/canonical/axiomaton/internal/config"
+	"github.com/canonical/axiomaton/internal/models"
+)
+
+// Client talks to one endpoint.
+type Client struct {
+	Endpoint config.Endpoint
+	HTTP     *http.Client
+}
+
+// New creates a client for the resolved endpoint.
+func New(ep config.Endpoint) *Client {
+	return &Client{Endpoint: ep, HTTP: &http.Client{Timeout: 120 * time.Second}}
+}
+
+// Name returns the model identifier.
+func (c *Client) Name() string { return c.Endpoint.Model }
+
+// v1 joins a path onto the /v1 API root. Base URLs that already end in /v1
+// are respected so OpenAI compatible servers work unchanged.
+func (c *Client) v1(path string) string {
+	base := c.Endpoint.BaseURL
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base + path
+}
+
+// alpha joins a path onto the OpenRouter alpha API root.
+func (c *Client) alpha(path string) string {
+	base := strings.TrimSuffix(c.Endpoint.BaseURL, "/v1")
+	return base + "/alpha" + path
+}
+
+func (c *Client) post(ctx context.Context, url string, req, resp any) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	hreq.Header.Set("Authorization", "Bearer "+c.Endpoint.APIKey)
+	hreq.Header.Set("Content-Type", "application/json")
+	hreq.Header.Set("HTTP-Referer", "https://github.com/canonical/axiomaton")
+	hreq.Header.Set("X-Title", "axiomaton")
+	hresp, err := c.HTTP.Do(hreq)
+	if err != nil {
+		return err
+	}
+	defer hresp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(hresp.Body, 32<<20))
+	if err != nil {
+		return err
+	}
+	if hresp.StatusCode/100 != 2 {
+		return fmt.Errorf("%s %s: %s: %s", c.Endpoint.Model, url, hresp.Status, snippet(data))
+	}
+	var envelope struct {
+		Error *struct {
+			Code    any    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &envelope) == nil && envelope.Error != nil && envelope.Error.Message != "" {
+		return fmt.Errorf("%s %s: %v: %s", c.Endpoint.Model, url, envelope.Error.Code, envelope.Error.Message)
+	}
+	if err := json.Unmarshal(data, resp); err != nil {
+		return fmt.Errorf("%s: decode response: %w: %s", url, err, snippet(data))
+	}
+	return nil
+}
+
+func snippet(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > 400 {
+		s = s[:400] + "..."
+	}
+	return s
+}
+
+// Embed implements models.Embedder via POST /v1/embeddings.
+func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	req := map[string]any{"model": c.Endpoint.Model, "input": texts, "encoding_format": "float"}
+	var resp struct {
+		Data []struct {
+			Index     int       `json:"index"`
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := c.post(ctx, c.v1("/embeddings"), req, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Data) != len(texts) {
+		return nil, fmt.Errorf("embeddings: got %d vectors for %d inputs", len(resp.Data), len(texts))
+	}
+	out := make([][]float32, len(texts))
+	for i, d := range resp.Data {
+		idx := d.Index
+		if idx < 0 || idx >= len(out) {
+			idx = i
+		}
+		out[idx] = d.Embedding
+	}
+	return out, nil
+}
+
+// Rerank implements models.Reranker via POST /v1/rerank.
+func (c *Client) Rerank(ctx context.Context, query string, docs []string, topN int) ([]models.Ranked, error) {
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	req := map[string]any{"model": c.Endpoint.Model, "query": query, "documents": docs, "return_documents": false}
+	if topN > 0 {
+		req["top_n"] = topN
+	}
+	var resp struct {
+		Results []struct {
+			Index          int     `json:"index"`
+			RelevanceScore float64 `json:"relevance_score"`
+		} `json:"results"`
+	}
+	if err := c.post(ctx, c.v1("/rerank"), req, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]models.Ranked, 0, len(resp.Results))
+	for _, r := range resp.Results {
+		out = append(out, models.Ranked{Index: r.Index, Score: r.RelevanceScore})
+	}
+	return out, nil
+}
+
+// Decide implements models.Decider via the OpenRouter Decisions API, which
+// serves typed decision models such as typesafe/jev.
+func (c *Client) Decide(ctx context.Context, p models.Pair) (models.Decision, error) {
+	req := map[string]any{
+		"model": c.Endpoint.Model,
+		"state": map[string]any{
+			"subject":         p.Subject,
+			"newer_statement": p.Newer,
+			"newer_clock":     p.NewerClock,
+			"older_statement": p.Older,
+			"older_clock":     p.OlderClock,
+		},
+		"questions": map[string]any{
+			"relation": map[string]any{
+				"type": "choice",
+				"instructions": "Both statements are axioms about the same subject; the newer one was " +
+					"recorded at a later clock than the older one. Classify how the newer statement " +
+					"relates to the older statement.",
+				"criteria": map[string]string{
+					string(models.Contradicts): "The newer statement conflicts with, replaces, narrows, " +
+						"broadens or otherwise changes what the older statement asserts, so a reader who " +
+						"believed the older statement would now be wrong or out of date.",
+					string(models.Restates): "The newer statement asserts the same fact as the older one, " +
+						"possibly in different words or with trivial extra detail; believing either is equivalent.",
+					string(models.Unrelated): "The statements are about different facts and can both be " +
+						"true at the same time without either changing the meaning of the other.",
+				},
+			},
+		},
+	}
+	var resp struct {
+		Answers struct {
+			Relation struct {
+				Choice        string             `json:"choice"`
+				Confidence    float64            `json:"confidence"`
+				Probabilities map[string]float64 `json:"probabilities"`
+			} `json:"relation"`
+		} `json:"answers"`
+	}
+	if err := c.post(ctx, c.alpha("/decisions"), req, &resp); err != nil {
+		return models.Decision{}, err
+	}
+	d := models.Decision{
+		Relation:      models.Relation(resp.Answers.Relation.Choice),
+		Confidence:    resp.Answers.Relation.Confidence,
+		Probabilities: map[models.Relation]float64{},
+	}
+	for k, v := range resp.Answers.Relation.Probabilities {
+		d.Probabilities[models.Relation(k)] = v
+	}
+	switch d.Relation {
+	case models.Contradicts, models.Restates, models.Unrelated:
+	default:
+		return d, fmt.Errorf("decision model returned unknown relation %q", d.Relation)
+	}
+	return d, nil
+}
+
+// Chat sends a single system+user exchange via POST /v1/chat/completions.
+func (c *Client) Chat(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	req := map[string]any{
+		"model": c.Endpoint.Model,
+		"messages": []map[string]string{
+			{"role": "system", "content": system},
+			{"role": "user", "content": user},
+		},
+	}
+	if maxTokens > 0 {
+		req["max_tokens"] = maxTokens
+	}
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := c.post(ctx, c.v1("/chat/completions"), req, &resp); err != nil {
+		return "", err
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("%s: chat completion returned no choices", c.Endpoint.Model)
+	}
+	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
+}
+
+// Summarise implements models.Summariser.
+func (c *Client) Summarise(ctx context.Context, markdown string, budget int) (string, error) {
+	system := "You condense change logs of foundational facts (axioms) for consumption by another " +
+		"language model. Preserve every distinct fact, the subject and clock it applies to, and which " +
+		"older facts it supersedes. Drop prose, repetition and sources. Output Markdown only."
+	user := fmt.Sprintf("Summarise the following in at most %d tokens.\n\n%s", budget, markdown)
+	return c.Chat(ctx, system, user, budget)
+}

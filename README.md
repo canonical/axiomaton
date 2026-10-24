@@ -16,20 +16,44 @@ since 2025-08-01 (primary clock), what has changed. It produces a Markdown outpu
 that could be injested by a LLM in it's context. A `--summarise`/`-s` flag can be
 provided to run the determistic generated output through a model to summarise it.
 
+The result contains axioms whose primary clock is after the cutoff and whose
+sub-clock is at or before the subject clock given (so `golang 1.26.1` excludes
+Go 1.27 facts). Axioms without a sub-clock always apply.
+
 A project can have a `axiomaton.cnf` file, which describes the subjects that are
 relevent to that project, `ax` will search the current directory, up to the root
 for every `axiomaton.cnf` file, layering them on top of each other. This allows
 a project or system to provide responses on subjects. Next to each `axiomaton.cnf`
 can be a `axiomlog` file that can also answer questions about subjects. Default
 subjects are only consumed up to the nearest directory containing a `.git`
-directory, which can be disabled with a `--global`/`-g` flag.
+directory, which can be disabled with a `--global`/`-g` flag. Logs above the
+repository are still consulted. A user wide log at
+`$XDG_DATA_HOME/axiomaton/axiomlog` is always consulted and is the fallback
+write target outside of any repository.
 
-When `ax since 2025-08-01` is run, the default subjects are returned.
+When `ax since 2025-08-01` is run, the default subjects are returned. When no
+default subjects are declared, nothing is printed and a warning goes to stderr.
 
-`axiomaton.cnf` files are written in YAML in this format:
+`axiomaton.cnf` files are written in YAML. Each subject is either the compact
+`[name, clock values...]` form or a mapping. Subjects that are not built in need
+a clock shape, declared inline or under `shapes:`, before clocked axioms can be
+added for them:
+
 ```yaml
-subjects: [[golang, 1.26.1], ...]
+subjects:
+  - [golang, 1.26.1]
+  - name: myservice
+    clock: [2.3.0]
+    shape:
+      - {name: version, kind: semver}
+  - [juju, 3f9c2a1]
+shapes:
+  juju:
+    - {name: commit, kind: git, repo: ../juju}
 ```
+
+Clock kinds are `semver`, `goversion`, `number`, `string` and `git` (ordered by
+`git merge-base --is-ancestor` in `repo`, relative to the config file).
 
 Axiomaton search is a combination of deterministic vector search through interleaved
 log files, and a filtering mechanism based on querying embedding/reranking models
@@ -37,18 +61,54 @@ to find similar, possibly contradictory axioms for a given subject. The resoluti
 of these similar axioms is via a decision model (like Jev), to determine if they
 do contracdict each-other or are too similar. If they are contradictory, the newer,
 by vector clock, is chosen as the truth. The `ax` tool will cache embedding vectors,
-decisions etc. in `$XDG_CACHE_HOME/axiomaton/`.
+decisions etc. in `$XDG_CACHE_HOME/axiomaton/`. Without an embedding and decision
+model configured (or with `--offline`), the deterministic output is still produced
+but superseded axioms are not detected.
 
-Configuration of `ax` is stored in `$XDG_CONFIG_HOME/aixomaton/ax.cnf`. It defines
+Configuration of `ax` is stored in `$XDG_CONFIG_HOME/axiomaton/ax.cnf`. It defines
 the model configuration for each model used, e.g. provider (e.g. OpenRouter),
 the model and authentication details. It requires an embedding/reranking model,
 decision model and two general purpose LLM models, one for summarisation (a low
 cost model good at summarisation) and a agentic capable model (a model capable of
 running tools, etc). It also defines a summary budget for the `-s` flag.
 
+```yaml
+providers:
+  openrouter:                       # built in; shown here with its defaults
+    base_url: https://openrouter.ai/api
+    api_key_env: OPENROUTER_API_KEY # or api_key: sk-or-...
+models:
+  embedding: {model: openai/text-embedding-3-small}
+  rerank:    {model: cohere/rerank-v3.5}        # optional
+  decision:  {model: typesafe/jev-1.13}         # OpenRouter Decisions API
+  summary:   {model: openai/gpt-5-mini}
+  agent:     {model: anthropic/claude-sonnet-4.5}
+summary_budget: 1500                # tokens
+search:
+  candidates: 8                     # nearest neighbours per axiom
+  min_similarity: 0.35              # cosine floor
+  rerank_top_n: 5
+  min_relevance: 0.1
+  decision_threshold: 0.5           # minimum probability to accept a verdict
+update:
+  image: public.ecr.aws/ubuntu/ubuntu:latest
+  max_iterations: 80                # tool calls per agent run
+  exec_timeout: 300                 # seconds per command in the container
+```
+
+Any model may set its own `provider`, `base_url`, `api_key` or `api_key_env`.
+Embeddings, rerank and chat use the OpenAI compatible `/v1` endpoints, so an
+OpenAI compatible server works for those roles; the decision role uses the
+OpenRouter Decisions API.
+
 The `ax` tool also contains these other commands:
 - `ax add 2026-08-19 golang 1.27.0 "a method declaration may declare its own type parameters."`
 - `ax update golang`
+- `ax subjects`
+
+`add` and `update` append to the nearest writeable `axiomlog` inside the
+repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
+repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
 The update command only works for built-in subjects, with golang as the only current
 built-in subject. All subject updates are performed as such, firstly, a containerised
@@ -57,4 +117,25 @@ with tool calls running inside the container via podman exec), to update the axi
 based on go's release notes. Then after the agent has concluded, for each individual
 axiom added, a new agent, with a new container, is asked to confirm, it. Only axioms
 that are confirmed are added automatically, axioms that are not confirmed require
-user input.
+user input. On a terminal the user is asked about each one; otherwise they are
+written to `<axiomlog>.pending` for later review, or accepted with `-y`.
+
+The built-in golang log is embedded from `internal/subjects/golang/axiomlog`;
+maintainers refresh it with `ax update golang -l internal/subjects/golang/axiomlog`.
+
+## Log format
+
+An `axiomlog` is JSON lines; blank lines and `#` comments are ignored. The `id`
+is a content hash and is recomputed on read.
+
+```json
+{"subject":"golang","time":"2026-08-19T00:00:00Z","clock":{"version":"1.27.0"},"statement":"A method declaration may declare its own type parameters.","source":"https://go.dev/doc/go1.27","by":"agent"}
+```
+
+## Building
+
+```sh
+go build ./cmd/ax
+go test ./...
+AX_PODMAN_TEST=1 go test ./internal/update/ -run TestPodmanIntegration   # needs podman and network
+```
