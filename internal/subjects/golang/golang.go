@@ -100,7 +100,8 @@ removed or added standard library APIs and packages, changed defaults, tooling
 behaviour changes (go command, vet, modules), runtime guarantees, and
 deprecations. Prefer statements about what IS true now over narrative about
 what changed. Do not record performance anecdotes, internal implementation
-details, platform port minutiae or marketing.
+details, platform port minutiae or marketing. For language changes, you must
+demonstrate an example.
 
 You work inside a fresh Ubuntu container with root access via the shell tool.
 The container starts with almost no tools installed; install what you need
@@ -176,7 +177,7 @@ Go release: %s (released %s)
 Statement: %s
 Claimed source: %s
 
-Investigate, then answer with the structured verdict: confirmed true or false,
+Investigate, then call the submit_answer tool with confirmed true or false
 and a one or two sentence reason citing what you checked.`,
 		a.Clock["version"], a.Time.Format("2006-01-02"), a.Statement, a.Source)
 }

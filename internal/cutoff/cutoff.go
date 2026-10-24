@@ -229,7 +229,7 @@ those. Marketing pages that do not state a date do not count. Do not guess
 from the release date. If sources disagree, prefer the vendor's documentation
 and say so in notes.
 
-Finish by answering with the structured output: found, cutoff (YYYY-MM-DD, or
+Finish by calling the submit_answer tool with found, cutoff (YYYY-MM-DD, or
 YYYY-MM if only the month is published), source URL and notes.`
 
 // Task is the research agent's user prompt for m.
