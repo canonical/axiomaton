@@ -16,6 +16,23 @@ since 2025-08-01 (primary clock), what has changed. It produces a Markdown outpu
 that could be injested by a LLM in it's context. A `--summarise`/`-s` flag can be
 provided to run the determistic generated output through a model to summarise it.
 
+`ax for openai/gpt-5-mini golang 1.26.1` does the same with the cutoff taken
+from the knowledge cutoff OpenRouter publishes for that model (its
+`/api/v1/models` listing, cached for a day under the cache directory, refreshed
+with `-refresh`). Model names match the OpenRouter id, canonical slug or
+display name; rolling aliases are followed and a `:variant` without its own
+cutoff falls back to the base model. When OpenRouter publishes no cutoff, `ax`
+runs a containerised agent (the same machinery as `ax update`, so it needs
+podman and an agent model) to find one in the vendor's documentation or model
+card, and if that fails it estimates the cutoff from the model's OpenRouter
+release date by subtracting the 90th percentile of the release-to-cutoff gaps
+seen among the models that publish both dates, with a warning naming the
+figure. A model with no release date at all
+falls back to the global epoch, 2023-08-01, which predates every
+built-in axiom. Each answer is stored in
+`$XDG_DATA_HOME/axiomaton/cutoffs.json`, which can be edited by hand, and is
+reused until `-refresh` is given; `--offline` skips the agent.
+
 The result contains axioms whose primary clock is after the cutoff and whose
 sub-clock is at or before the subject clock given (so `golang 1.26.1` excludes
 Go 1.27 facts). Axioms without a sub-clock always apply.
@@ -127,6 +144,7 @@ OpenAI compatible server works for those roles; the decision role uses the
 OpenRouter Decisions API.
 
 The `ax` tool also contains these other commands:
+- `ax for anthropic/claude-sonnet-4.5`
 - `ax add 2026-08-19 golang 1.27.0 "a method declaration may declare its own type parameters."`
 - `ax update golang`
 - `ax subjects`

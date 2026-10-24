@@ -262,6 +262,24 @@ func (u User) Resolve(role string) (Endpoint, error) {
 	return ep, nil
 }
 
+// ProviderEndpoint resolves a provider's connection details for calls that
+// are not tied to a model role, such as listing models. A missing API key
+// is not an error; the endpoint is returned without one.
+func (u User) ProviderEndpoint(name string) (Endpoint, error) {
+	prov, ok := u.Providers[name]
+	if !ok {
+		return Endpoint{}, fmt.Errorf("provider %q is not configured", name)
+	}
+	if prov.BaseURL == "" {
+		return Endpoint{}, fmt.Errorf("provider %q has no base_url", name)
+	}
+	ep := Endpoint{Provider: name, BaseURL: strings.TrimRight(prov.BaseURL, "/"), APIKey: prov.APIKey}
+	if ep.APIKey == "" && prov.APIKeyEnv != "" {
+		ep.APIKey = os.Getenv(prov.APIKeyEnv)
+	}
+	return ep, nil
+}
+
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

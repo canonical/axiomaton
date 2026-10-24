@@ -32,6 +32,18 @@ func server(t *testing.T) (*Client, *map[string]any) {
 	t.Helper()
 	var last map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/models" {
+			if r.Method != http.MethodGet || r.Header.Get("Authorization") != "" || r.Header.Get("Content-Type") != "" {
+				http.Error(w, "models must be an anonymous GET", 400)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": []any{
+				map[string]any{"id": "a/b", "name": "A: B", "canonical_slug": "a/b-20250101", "knowledge_cutoff": "2025-01-31"},
+				map[string]any{"id": "c/d", "name": "C: D", "canonical_slug": "c/d", "knowledge_cutoff": nil,
+					"alias_target": map[string]any{"slug": "a/b", "name": "A: B"}},
+			}})
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer key" {
 			http.Error(w, `{"error":{"code":401,"message":"nope"}}`, 401)
 			return
@@ -92,6 +104,12 @@ func TestClient(t *testing.T) {
 	c.Endpoint.APIKey = "bad"
 	if _, err := c.Embed(ctx, []string{"a"}); err == nil {
 		t.Fatal("expected auth error")
+	}
+
+	c.Endpoint.APIKey = ""
+	ms, err := c.ListModels(ctx)
+	if err != nil || len(ms) != 2 || ms[0].KnowledgeCutoff != "2025-01-31" || ms[1].KnowledgeCutoff != "" || ms[1].AliasTarget == nil || ms[1].AliasTarget.Slug != "a/b" {
+		t.Fatalf("models: %+v %v", ms, err)
 	}
 }
 

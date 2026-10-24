@@ -43,6 +43,7 @@ const usage = `ax answers what foundational knowledge (axioms) has changed since
 
 Usage:
   ax [global flags] since <date> [subject [clock values...]]
+  ax [global flags] for <model> [subject [clock values...]]
   ax [global flags] add <date> <subject> [clock values...] "<statement>"
   ax [global flags] update <subject>
   ax [global flags] subjects
@@ -55,6 +56,8 @@ Commands:
             subject, the default subjects from axiomaton.cnf files are used.
             A built-in subject given without a clock reads the project's
             version from its own files (golang: the go directive in go.mod).
+  for       Like since, with the cutoff taken from the knowledge cutoff that
+            OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
   add       Append an axiom to the nearest writeable axiomlog.
   update    Run containerised agents to extend the log of a built-in subject.
   subjects  List known subjects and where they come from.
@@ -112,6 +115,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch rest[0] {
 	case "since":
 		return a.since(ctx, rest[1:])
+	case "for":
+		return a.forCmd(ctx, rest[1:])
 	case "add":
 		return a.add(ctx, rest[1:])
 	case "update":
@@ -230,14 +235,21 @@ func (a *app) since(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	return a.report(ctx, since, rest[1:], *summarise)
+}
+
+// report renders what changed after since for the subject named in args
+// (name followed by clock values), or for the default subjects when args is
+// empty, optionally summarising the result.
+func (a *app) report(ctx context.Context, since time.Time, args []string, summarise bool) error {
 	e, err := a.load()
 	if err != nil {
 		return err
 	}
 
 	var targets []config.SubjectRef
-	if len(rest) > 1 {
-		targets = []config.SubjectRef{{Name: rest[1], Clock: rest[2:]}}
+	if len(args) > 0 {
+		targets = []config.SubjectRef{{Name: args[0], Clock: args[1:]}}
 	} else {
 		targets = e.ws.DefaultSubjects(a.global)
 		if len(targets) == 0 {
@@ -268,7 +280,7 @@ func (a *app) since(ctx context.Context, args []string) error {
 		results = append(results, r)
 	}
 	md := query.Render(since, results)
-	if *summarise {
+	if summarise {
 		ep, err := e.cfg.Resolve(config.RoleSummary)
 		if err != nil {
 			return fmt.Errorf("-s: %w", err)
@@ -443,19 +455,12 @@ func (a *app) update(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	img := e.cfg.Update.Image
-	if *image != "" {
-		img = *image
-	}
-	var logger *slog.Logger
-	if a.verbose {
-		logger = slog.New(slog.NewTextHandler(a.stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	}
 	progress := func(format string, args ...any) { fmt.Fprintf(a.stderr, "ax: "+format+"\n", args...) }
+	rt, ag := a.agentParts(e.cfg, ep, *image)
 	u := &update.Updater{
 		Subject:     builtin,
-		Runtime:     update.Podman{Image: img, Log: a.logf},
-		Agent:       update.FrameworkAgent{Endpoint: ep, MaxIterations: e.cfg.Update.MaxIterations, MaxRetries: e.cfg.Retry.MaxAttempts - 1, Logger: logger},
+		Runtime:     rt,
+		Agent:       ag,
 		ExecTimeout: time.Duration(e.cfg.Update.ExecTimeout) * time.Second,
 		Log:         progress,
 	}
@@ -507,6 +512,20 @@ func (a *app) update(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintf(a.stderr, "ax: %d reviewed axiom(s) appended to %s\n", len(accepted), target)
 	return nil
+}
+
+// agentParts builds the podman runtime and framework agent used by the
+// containerised commands. An empty image means the configured one.
+func (a *app) agentParts(cfg config.User, ep config.Endpoint, image string) (update.Podman, update.FrameworkAgent) {
+	if image == "" {
+		image = cfg.Update.Image
+	}
+	var logger *slog.Logger
+	if a.verbose {
+		logger = slog.New(slog.NewTextHandler(a.stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	}
+	return update.Podman{Image: image, Log: a.logf},
+		update.FrameworkAgent{Endpoint: ep, MaxIterations: cfg.Update.MaxIterations, MaxRetries: cfg.Retry.MaxAttempts - 1, Logger: logger}
 }
 
 func (a *app) subjects(_ context.Context, args []string) error {

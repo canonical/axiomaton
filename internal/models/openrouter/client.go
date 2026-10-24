@@ -79,20 +79,30 @@ func (c *Client) alpha(path string) string {
 	return base + "/alpha" + path
 }
 
-// post sends req as JSON and decodes the response into resp, retrying rate
-// limited and transient failures with exponential backoff and full jitter.
+// post sends req as JSON and decodes the response into resp.
 func (c *Client) post(ctx context.Context, url string, req, resp any) error {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
+	return c.request(ctx, http.MethodPost, url, body, resp)
+}
+
+// get fetches url and decodes the response into resp.
+func (c *Client) get(ctx context.Context, url string, resp any) error {
+	return c.request(ctx, http.MethodGet, url, nil, resp)
+}
+
+// request performs one API call, retrying rate limited and transient
+// failures with exponential backoff and full jitter.
+func (c *Client) request(ctx context.Context, method, url string, body []byte, resp any) error {
 	attempts := c.Retry.MaxAttempts
 	if attempts < 1 {
 		attempts = 1
 	}
 	var last error
 	for attempt := 1; ; attempt++ {
-		data, retryAfter, err := c.do(ctx, url, body)
+		data, retryAfter, err := c.do(ctx, method, url, body)
 		if err == nil {
 			if err := json.Unmarshal(data, resp); err != nil {
 				return fmt.Errorf("%s: decode response: %w: %s", url, err, strings.TrimSpace(string(data)))
@@ -132,13 +142,21 @@ func (e *transientError) Unwrap() error { return e.err }
 
 // do performs one HTTP attempt. Retryable failures are returned as
 // *transientError together with any Retry-After hint from the server.
-func (c *Client) do(ctx context.Context, url string, body []byte) ([]byte, time.Duration, error) {
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+func (c *Client) do(ctx context.Context, method, url string, body []byte) ([]byte, time.Duration, error) {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	hreq, err := http.NewRequestWithContext(ctx, method, url, rd)
 	if err != nil {
 		return nil, 0, err
 	}
-	hreq.Header.Set("Authorization", "Bearer "+c.Endpoint.APIKey)
-	hreq.Header.Set("Content-Type", "application/json")
+	if c.Endpoint.APIKey != "" {
+		hreq.Header.Set("Authorization", "Bearer "+c.Endpoint.APIKey)
+	}
+	if body != nil {
+		hreq.Header.Set("Content-Type", "application/json")
+	}
 	hreq.Header.Set("HTTP-Referer", "https://github.com/canonical/axiomaton")
 	hreq.Header.Set("X-Title", "axiomaton")
 	hresp, err := c.HTTP.Do(hreq)
@@ -454,4 +472,37 @@ func (c *Client) Summarise(ctx context.Context, markdown string, budget int) (st
 		"older facts it supersedes. Drop prose, repetition and sources. Output Markdown only."
 	user := fmt.Sprintf("Summarise the following in at most %d tokens.\n\n%s", budget, markdown)
 	return c.Chat(ctx, system, user, budget)
+}
+
+// ModelInfo is the subset of GET /v1/models that ax uses.
+type ModelInfo struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	CanonicalSlug string `json:"canonical_slug"`
+	// Created is the Unix time the model was listed, which stands in for
+	// its release date.
+	Created int64 `json:"created"`
+	// KnowledgeCutoff is YYYY-MM-DD, or empty when the provider has not
+	// published one.
+	KnowledgeCutoff string `json:"knowledge_cutoff"`
+	// AliasTarget is set for rolling aliases such as ~vendor/model-latest.
+	AliasTarget *struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+	} `json:"alias_target,omitempty"`
+}
+
+// ListModels fetches the model catalogue. The endpoint works without an API
+// key.
+func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	var resp struct {
+		Data []ModelInfo `json:"data"`
+	}
+	if err := c.get(ctx, c.v1("/models"), &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Data) == 0 {
+		return nil, fmt.Errorf("%s/models returned no models", c.v1(""))
+	}
+	return resp.Data, nil
 }
