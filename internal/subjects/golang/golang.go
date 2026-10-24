@@ -18,7 +18,11 @@ package golang
 import (
 	_ "embed"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"golang.org/x/mod/modfile"
 
 	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/axiomlog"
@@ -41,6 +45,50 @@ func (Subject) Shape() []axiom.ClockShape {
 
 func (Subject) Seed() ([]axiom.Axiom, error) {
 	return axiomlog.Read(strings.NewReader(seed), "builtin:golang")
+}
+
+// Detect reports whether dir is part of a Go module by looking for a go.mod
+// in dir or its parents, stopping at the repository root. The clock is the
+// module's go directive, which fixes the language version the code is
+// written against.
+func (Subject) Detect(dir string) (clock []string, source string, ok bool) {
+	path, ok := findUp(dir, "go.mod")
+	if !ok {
+		return nil, "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", false
+	}
+	f, err := modfile.ParseLax(path, data, nil)
+	if err != nil || f.Go == nil || f.Go.Version == "" {
+		return nil, "", false
+	}
+	return []string{f.Go.Version}, path, true
+}
+
+// findUp returns the nearest file called name in dir or its parents. The
+// search ends at the first directory holding a .git entry, so a module
+// above the repository is not mistaken for the project's own.
+func findUp(dir, name string) (string, bool) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false
+	}
+	for {
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return "", false
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
 }
 
 func (Subject) UpdateInstructions() string {

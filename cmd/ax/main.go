@@ -46,15 +46,20 @@ Usage:
   ax [global flags] add <date> <subject> [clock values...] "<statement>"
   ax [global flags] update <subject>
   ax [global flags] subjects
+  ax [global flags] init [built-in subject...]
   ax [global flags] setup
 
 Commands:
   since     Render the axioms for a subject that became true after <date>,
             restricted to the subject's clock (e.g. golang 1.26.1). Without a
             subject, the default subjects from axiomaton.cnf files are used.
+            A built-in subject given without a clock reads the project's
+            version from its own files (golang: the go directive in go.mod).
   add       Append an axiom to the nearest writeable axiomlog.
   update    Run containerised agents to extend the log of a built-in subject.
   subjects  List known subjects and where they come from.
+  init      Write an axiomaton.cnf for this project listing the built-in
+            subjects detected here (e.g. golang from go.mod).
   setup     Write ax.cnf interactively and test the configured models.
 
 Global flags:
@@ -113,6 +118,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return a.update(ctx, rest[1:])
 	case "subjects":
 		return a.subjects(ctx, rest[1:])
+	case "init":
+		return a.init(ctx, rest[1:])
 	case "setup":
 		return a.setup(ctx, rest[1:])
 	case "help", "-h", "--help":
@@ -242,6 +249,7 @@ func (a *app) since(ctx context.Context, args []string) error {
 	res := a.resolver(e.cfg)
 	var results []query.Result
 	for _, t := range targets {
+		t.Clock = a.detectClock(t)
 		subj, inferred := e.reg.Resolve(t.Name, t.Clock)
 		if inferred {
 			a.warnf("subject %q has no declared clock shape; inferred %s from the values given", t.Name, describeShape(subj.Shape))
@@ -274,6 +282,24 @@ func (a *app) since(ctx context.Context, args []string) error {
 	}
 	_, err = io.WriteString(a.stdout, md)
 	return err
+}
+
+// detectClock fills in the clock of a built-in subject referenced without
+// one by reading the project's own files from the working directory.
+func (a *app) detectClock(ref config.SubjectRef) []string {
+	if len(ref.Clock) > 0 {
+		return ref.Clock
+	}
+	b, ok := subjects.Lookup(ref.Name)
+	if !ok {
+		return nil
+	}
+	clock, source, ok := b.Detect(a.dir)
+	if !ok {
+		return nil
+	}
+	a.logf("%s clock %s detected from %s", ref.Name, strings.Join(clock, " "), shortenFrom(a.dir, source))
+	return clock
 }
 
 func describeShape(shape []axiom.ClockShape) string {
@@ -504,9 +530,16 @@ func (a *app) subjects(_ context.Context, args []string) error {
 	for n := range counts {
 		names[n] = true
 	}
-	defaults := map[string][]string{}
+	defaults := map[string]string{}
 	for _, d := range e.ws.DefaultSubjects(a.global) {
-		defaults[d.Name] = d.Clock
+		switch clock := a.detectClock(d); {
+		case len(d.Clock) > 0:
+			defaults[d.Name] = strings.Join(clock, " ")
+		case len(clock) > 0:
+			defaults[d.Name] = strings.Join(clock, " ") + " (detected)"
+		default:
+			defaults[d.Name] = "any"
+		}
 	}
 	var sorted []string
 	for n := range names {
@@ -517,7 +550,7 @@ func (a *app) subjects(_ context.Context, args []string) error {
 		subj, _ := e.reg.Lookup(n)
 		line := fmt.Sprintf("%s\tshape %s\t%d axiom(s)", n, describeShape(subj.Shape), counts[n])
 		if clock, ok := defaults[n]; ok {
-			line += fmt.Sprintf("\tdefault @ %s", strings.Join(clock, " "))
+			line += "\tdefault @ " + clock
 		}
 		var from []string
 		for o := range origins[n] {

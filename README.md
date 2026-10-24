@@ -34,6 +34,15 @@ write target outside of any repository.
 When `ax since 2025-08-01` is run, the default subjects are returned. When no
 default subjects are declared, nothing is printed and a warning goes to stderr.
 
+Run `ax init` in a project to create its `axiomaton.cnf` (and an empty
+`axiomlog`). Built-in subjects detect themselves: `golang` is listed when a
+`go.mod` is found in the directory or its parents up to the repository root.
+Detected subjects are written without a clock, and a built-in subject named
+without a clock, in the file or on the command line, takes its clock from the
+project at query time (`golang` uses the `go` directive in `go.mod`), so the
+file never goes stale. Give an explicit clock to pin a version instead.
+Further built-in subjects can be named as arguments, e.g. `ax init golang`.
+
 `axiomaton.cnf` files are written in YAML. Each subject is either the compact
 `[name, clock values...]` form or a mapping. Subjects that are not built in need
 a clock shape, declared inline or under `shapes:`, before clocked axioms can be
@@ -41,7 +50,7 @@ added for them:
 
 ```yaml
 subjects:
-  - [golang, 1.26.1]
+  - golang                 # clock read from go.mod; pin with [golang, 1.26.1]
   - name: myservice
     clock: [2.3.0]
     shape:
@@ -121,6 +130,7 @@ The `ax` tool also contains these other commands:
 - `ax add 2026-08-19 golang 1.27.0 "a method declaration may declare its own type parameters."`
 - `ax update golang`
 - `ax subjects`
+- `ax init`
 - `ax setup`
 
 `add` and `update` append to the nearest writeable `axiomlog` inside the

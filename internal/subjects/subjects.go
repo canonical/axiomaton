@@ -37,6 +37,28 @@ type Builtin interface {
 	ConfirmInstructions() string
 	// ConfirmTask is the user prompt asking to verify one proposed axiom.
 	ConfirmTask(a axiom.Axiom) string
+	// Detect reports whether the project at dir uses this subject and, if
+	// so, the project's current clock and where it was read from.
+	Detect(dir string) (clock []string, source string, ok bool)
+}
+
+// Detected is a built-in subject found in a project directory.
+type Detected struct {
+	Subject Builtin
+	Clock   []string
+	// Source is the file the clock was read from.
+	Source string
+}
+
+// Detect runs every built-in subject's detection against dir.
+func Detect(dir string) []Detected {
+	var out []Detected
+	for _, n := range Names() {
+		if clock, source, ok := all[n].Detect(dir); ok {
+			out = append(out, Detected{Subject: all[n], Clock: clock, Source: source})
+		}
+	}
+	return out
 }
 
 var all = map[string]Builtin{
