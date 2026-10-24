@@ -20,9 +20,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,11 +37,27 @@ import (
 type Client struct {
 	Endpoint config.Endpoint
 	HTTP     *http.Client
+	// Retry controls backoff after rate limits and transient failures.
+	Retry config.Retry
+	// Log, if set, receives a line per retry.
+	Log func(format string, args ...any)
+	// sleep is replaced in tests.
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
-// New creates a client for the resolved endpoint.
+// New creates a client for the resolved endpoint with the default retry
+// policy.
 func New(ep config.Endpoint) *Client {
-	return &Client{Endpoint: ep, HTTP: &http.Client{Timeout: 120 * time.Second}}
+	return &Client{Endpoint: ep, HTTP: &http.Client{Timeout: 120 * time.Second}, Retry: config.DefaultUser().Retry}
+}
+
+// WithRetry sets the retry policy and returns the client for chaining.
+func (c *Client) WithRetry(r config.Retry, log func(string, ...any)) *Client {
+	if r.MaxAttempts > 0 {
+		c.Retry = r
+	}
+	c.Log = log
+	return c
 }
 
 // Name returns the model identifier.
@@ -60,14 +79,63 @@ func (c *Client) alpha(path string) string {
 	return base + "/alpha" + path
 }
 
+// post sends req as JSON and decodes the response into resp, retrying rate
+// limited and transient failures with exponential backoff and full jitter.
 func (c *Client) post(ctx context.Context, url string, req, resp any) error {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
+	attempts := c.Retry.MaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	var last error
+	for attempt := 1; ; attempt++ {
+		data, retryAfter, err := c.do(ctx, url, body)
+		if err == nil {
+			if err := json.Unmarshal(data, resp); err != nil {
+				return fmt.Errorf("%s: decode response: %w: %s", url, err, strings.TrimSpace(string(data)))
+			}
+			return nil
+		}
+		last = err
+		var te *transientError
+		if !errors.As(err, &te) || attempt >= attempts || ctx.Err() != nil {
+			break
+		}
+		delay := c.backoff(attempt, retryAfter)
+		if c.Log != nil {
+			c.Log("%s: %s; retrying in %s (attempt %d of %d)", c.Endpoint.Model, te.reason, delay.Round(time.Millisecond), attempt+1, attempts)
+		}
+		if err := c.pause(ctx, delay); err != nil {
+			return fmt.Errorf("%w (while waiting to retry: %v)", last, err)
+		}
+	}
+	if attempts > 1 {
+		var te *transientError
+		if errors.As(last, &te) {
+			return fmt.Errorf("%w (gave up after %d attempts)", last, attempts)
+		}
+	}
+	return last
+}
+
+// transientError marks a failure that is worth retrying.
+type transientError struct {
+	reason string
+	err    error
+}
+
+func (e *transientError) Error() string { return e.err.Error() }
+func (e *transientError) Unwrap() error { return e.err }
+
+// do performs one HTTP attempt. Retryable failures are returned as
+// *transientError together with any Retry-After hint from the server.
+func (c *Client) do(ctx context.Context, url string, body []byte) ([]byte, time.Duration, error) {
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	hreq.Header.Set("Authorization", "Bearer "+c.Endpoint.APIKey)
 	hreq.Header.Set("Content-Type", "application/json")
@@ -75,15 +143,23 @@ func (c *Client) post(ctx context.Context, url string, req, resp any) error {
 	hreq.Header.Set("X-Title", "axiomaton")
 	hresp, err := c.HTTP.Do(hreq)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return nil, 0, err
+		}
+		return nil, 0, &transientError{reason: "connection failed", err: err}
 	}
 	defer hresp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(hresp.Body, 32<<20))
 	if err != nil {
-		return err
+		return nil, 0, &transientError{reason: "reading response failed", err: err}
 	}
+	retryAfter := parseRetryAfter(hresp.Header)
 	if hresp.StatusCode/100 != 2 {
-		return fmt.Errorf("%s %s: %s: %s", c.Endpoint.Model, url, hresp.Status, snippet(data))
+		err := fmt.Errorf("%s %s: %s: %s", c.Endpoint.Model, url, hresp.Status, errorDetail(data))
+		if retryable(hresp.StatusCode) {
+			return nil, retryAfter, &transientError{reason: hresp.Status, err: err}
+		}
+		return nil, 0, err
 	}
 	var envelope struct {
 		Error *struct {
@@ -92,20 +168,143 @@ func (c *Client) post(ctx context.Context, url string, req, resp any) error {
 		} `json:"error"`
 	}
 	if json.Unmarshal(data, &envelope) == nil && envelope.Error != nil && envelope.Error.Message != "" {
-		return fmt.Errorf("%s %s: %v: %s", c.Endpoint.Model, url, envelope.Error.Code, envelope.Error.Message)
+		err := fmt.Errorf("%s %s: error %v: %s", c.Endpoint.Model, url, envelope.Error.Code, errorDetail(data))
+		if code, ok := envelope.Error.Code.(float64); ok && retryable(int(code)) {
+			return nil, retryAfter, &transientError{reason: fmt.Sprintf("error %d", int(code)), err: err}
+		}
+		return nil, 0, err
 	}
-	if err := json.Unmarshal(data, resp); err != nil {
-		return fmt.Errorf("%s: decode response: %w: %s", url, err, snippet(data))
-	}
-	return nil
+	return data, 0, nil
 }
 
-func snippet(b []byte) string {
-	s := strings.TrimSpace(string(b))
-	if len(s) > 400 {
-		s = s[:400] + "..."
+// retryable reports whether an HTTP status is worth another attempt.
+func retryable(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
 	}
-	return s
+	return false
+}
+
+// parseRetryAfter reads a Retry-After header given as seconds or a date.
+func parseRetryAfter(h http.Header) time.Duration {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseFloat(v, 64); err == nil && secs > 0 {
+		return time.Duration(secs * float64(time.Second))
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// backoff picks the delay before the next attempt: full jitter over an
+// exponentially growing ceiling, never less than the server's Retry-After.
+func (c *Client) backoff(attempt int, retryAfter time.Duration) time.Duration {
+	initial, maxDelay := c.Retry.Initial(), c.Retry.Max()
+	if initial <= 0 {
+		initial = time.Second
+	}
+	if maxDelay < initial {
+		maxDelay = initial
+	}
+	ceiling := initial << (attempt - 1)
+	if ceiling > maxDelay || ceiling <= 0 {
+		ceiling = maxDelay
+	}
+	delay := time.Duration(rand.Int64N(int64(ceiling)) + 1)
+	if retryAfter > delay {
+		delay = retryAfter
+	}
+	if cap := 2 * maxDelay; retryAfter > cap {
+		delay = cap
+	}
+	return delay
+}
+
+func (c *Client) pause(ctx context.Context, d time.Duration) error {
+	if c.sleep != nil {
+		return c.sleep(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// errorDetail turns an error response body into a readable message without
+// losing anything: OpenRouter error envelopes are flattened, provider errors
+// nested as JSON strings are unwrapped, and anything else is returned whole.
+func errorDetail(data []byte) string {
+	var env struct {
+		Error *struct {
+			Code     any            `json:"code"`
+			Message  string         `json:"message"`
+			Metadata map[string]any `json:"metadata"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &env) != nil || env.Error == nil || env.Error.Message == "" {
+		return strings.TrimSpace(string(data))
+	}
+	msg := unwrap(env.Error.Message)
+	var extra []string
+	if p, ok := env.Error.Metadata["provider_name"].(string); ok && p != "" {
+		extra = append(extra, "provider "+p)
+	}
+	if raw, ok := env.Error.Metadata["raw"].(string); ok && raw != "" && !strings.Contains(env.Error.Message, raw) {
+		extra = append(extra, "raw: "+unwrap(raw))
+	}
+	if len(extra) > 0 {
+		msg += " (" + strings.Join(extra, "; ") + ")"
+	}
+	return msg
+}
+
+// unwrap expands messages such as `HTTP 429: {"error":{"message":...}}` where
+// a provider's JSON error is embedded as a string, keeping its code, type and
+// request id.
+func unwrap(msg string) string {
+	i := strings.Index(msg, "{")
+	if i < 0 {
+		return msg
+	}
+	var inner struct {
+		Error *struct {
+			Message string `json:"message"`
+			Code    any    `json:"code"`
+			Type    string `json:"type"`
+		} `json:"error"`
+		RequestID string `json:"request_id"`
+	}
+	if json.Unmarshal([]byte(msg[i:]), &inner) != nil || inner.Error == nil || inner.Error.Message == "" {
+		return msg
+	}
+	out := strings.TrimSpace(strings.TrimSpace(msg[:i]) + " " + unwrap(inner.Error.Message))
+	var tags []string
+	if c := fmt.Sprint(inner.Error.Code); inner.Error.Code != nil && c != "" {
+		tags = append(tags, "code "+c)
+	}
+	if inner.Error.Type != "" {
+		tags = append(tags, "type "+inner.Error.Type)
+	}
+	if inner.RequestID != "" {
+		tags = append(tags, "request "+inner.RequestID)
+	}
+	if len(tags) > 0 {
+		out += " [" + strings.Join(tags, ", ") + "]"
+	}
+	return out
 }
 
 // Embed implements models.Embedder via POST /v1/embeddings.

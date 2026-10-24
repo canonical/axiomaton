@@ -18,7 +18,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/canonical/axiomaton/internal/axiom"
 )
@@ -120,5 +122,58 @@ shapes:
 	}
 	if _, ok := reg.Lookup("juju"); !ok {
 		t.Fatal("juju not registered")
+	}
+}
+
+func TestRenderRoundTrip(t *testing.T) {
+	u := DefaultUser()
+	p := u.Providers["openrouter"]
+	p.APIKey = "sk-or-v1:odd/chars, here"
+	u.Providers["openrouter"] = p
+	u.Providers["local"] = Provider{BaseURL: "http://localhost:1234/v1", APIKey: "x"}
+	u.Models[RoleEmbedding] = Model{Model: "openai/text-embedding-3-small"}
+	u.Models[RoleSummary] = Model{Model: "7", Provider: "local"}
+	u.Search.MinSimilarity = 0.4
+	u.Update.Image = "docker.io/library/ubuntu:24.04"
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ax.cnf")
+	if err := WriteUser(path, u, time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("inline key should give 0600, got %v", info.Mode().Perm())
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "# rerank: not configured") || !strings.Contains(string(data), "written by ax setup on 2026-10-24") {
+		t.Fatalf("render:\n%s", data)
+	}
+	back, err := LoadUser(path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, data)
+	}
+	ep, err := back.Resolve(RoleEmbedding)
+	if err != nil || ep.APIKey != p.APIKey || ep.BaseURL != "https://openrouter.ai/api" {
+		t.Fatalf("embedding %+v %v", ep, err)
+	}
+	ep, err = back.Resolve(RoleSummary)
+	if err != nil || ep.Model != "7" || ep.BaseURL != "http://localhost:1234/v1" || ep.APIKey != "x" {
+		t.Fatalf("summary %+v %v", ep, err)
+	}
+	if back.Search.MinSimilarity != 0.4 || back.Search.Candidates != 8 || back.Update.Image != u.Update.Image || back.Update.ExecTimeout != 300 {
+		t.Fatalf("tunables: %+v", back)
+	}
+	if _, err := back.Resolve(RoleRerank); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("rerank: %v", err)
+	}
+
+	// Without an inline key the file is world readable.
+	if err := WriteUser(path, DefaultUser(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	info, _ = os.Stat(path)
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("expected 0644, got %v", info.Mode().Perm())
 	}
 }

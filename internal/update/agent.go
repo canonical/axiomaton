@@ -42,7 +42,10 @@ type Agent interface {
 type FrameworkAgent struct {
 	Endpoint      config.Endpoint
 	MaxIterations int
-	Logger        *slog.Logger
+	// MaxRetries is passed to the OpenAI client, which backs off on rate
+	// limits and server errors by itself.
+	MaxRetries int
+	Logger     *slog.Logger
 }
 
 func (f FrameworkAgent) client() openai.Client {
@@ -50,9 +53,14 @@ func (f FrameworkAgent) client() openai.Client {
 	if !strings.HasSuffix(base, "/v1") {
 		base += "/v1"
 	}
+	retries := f.MaxRetries
+	if retries <= 0 {
+		retries = config.DefaultUser().Retry.MaxAttempts - 1
+	}
 	return openai.NewClient(
 		option.WithBaseURL(base),
 		option.WithAPIKey(f.Endpoint.APIKey),
+		option.WithMaxRetries(retries),
 		option.WithHeader("HTTP-Referer", "https://github.com/canonical/axiomaton"),
 		option.WithHeader("X-Title", "axiomaton"),
 	)

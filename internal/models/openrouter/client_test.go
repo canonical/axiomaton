@@ -17,9 +17,12 @@ package openrouter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/canonical/axiomaton/internal/config"
 	"github.com/canonical/axiomaton/internal/models"
@@ -96,5 +99,139 @@ func TestV1Suffix(t *testing.T) {
 	c := New(config.Endpoint{BaseURL: "http://h/v1"})
 	if c.v1("/x") != "http://h/v1/x" || c.alpha("/d") != "http://h/alpha/d" {
 		t.Fatalf("%s %s", c.v1("/x"), c.alpha("/d"))
+	}
+}
+
+func retryServer(t *testing.T, script []func(w http.ResponseWriter)) (*Client, *[]time.Duration, *int) {
+	t.Helper()
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		i := calls
+		calls++
+		if i >= len(script) {
+			i = len(script) - 1
+		}
+		script[i](w)
+	}))
+	t.Cleanup(srv.Close)
+	var slept []time.Duration
+	c := New(config.Endpoint{Model: "m", BaseURL: srv.URL, APIKey: "key"})
+	c.Retry = config.Retry{MaxAttempts: 4, InitialBackoff: 1, MaxBackoff: 8}
+	c.sleep = func(ctx context.Context, d time.Duration) error { slept = append(slept, d); return ctx.Err() }
+	return c, &slept, &calls
+}
+
+func ok(w http.ResponseWriter) {
+	json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": "fine"}}}})
+}
+
+func status(code int, retryAfter string) func(http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		if retryAfter != "" {
+			w.Header().Set("Retry-After", retryAfter)
+		}
+		w.WriteHeader(code)
+		fmt.Fprintf(w, `{"error":{"code":%d,"message":"HTTP %d: rate limited"}}`, code, code)
+	}
+}
+
+func TestRetryRateLimit(t *testing.T) {
+	ctx := context.Background()
+	var logged []string
+	c, slept, calls := retryServer(t, []func(http.ResponseWriter){status(429, "3"), status(503, ""), ok})
+	c.Log = func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
+	out, err := c.Chat(ctx, "s", "u", 0)
+	if err != nil || out != "fine" || *calls != 3 {
+		t.Fatalf("out=%q err=%v calls=%d", out, err, *calls)
+	}
+	if len(*slept) != 2 || (*slept)[0] < 3*time.Second || (*slept)[1] > 2*time.Second || (*slept)[1] <= 0 {
+		t.Fatalf("delays: %v", *slept)
+	}
+	if len(logged) != 2 || !strings.Contains(logged[0], "429") || !strings.Contains(logged[0], "attempt 2 of 4") {
+		t.Fatalf("log: %q", logged)
+	}
+
+	// An error envelope inside a 200 with a retryable code is retried too.
+	c, _, calls = retryServer(t, []func(http.ResponseWriter){
+		func(w http.ResponseWriter) { fmt.Fprint(w, `{"error":{"code":429,"message":"HTTP 429: slow down"}}`) }, ok,
+	})
+	if _, err := c.Chat(ctx, "s", "u", 0); err != nil || *calls != 2 {
+		t.Fatalf("envelope retry: %v calls=%d", err, *calls)
+	}
+
+	// Client errors are not retried.
+	c, slept, calls = retryServer(t, []func(http.ResponseWriter){status(400, ""), ok})
+	if _, err := c.Chat(ctx, "s", "u", 0); err == nil || *calls != 1 || len(*slept) != 0 || strings.Contains(err.Error(), "gave up") {
+		t.Fatalf("400: %v calls=%d slept=%v", err, *calls, *slept)
+	}
+
+	// Persistent throttling gives up after MaxAttempts with a clear message.
+	c, slept, calls = retryServer(t, []func(http.ResponseWriter){status(429, "")})
+	_, err = c.Chat(ctx, "s", "u", 0)
+	if err == nil || *calls != 4 || len(*slept) != 3 || !strings.Contains(err.Error(), "gave up after 4 attempts") || !strings.Contains(err.Error(), "429") {
+		t.Fatalf("give up: %v calls=%d slept=%v", err, *calls, *slept)
+	}
+	for i, d := range *slept {
+		if ceiling := time.Second << i; d <= 0 || d > ceiling {
+			t.Fatalf("delay %d = %v exceeds ceiling %v", i, d, ceiling)
+		}
+	}
+
+	// Cancellation during the wait stops retrying.
+	cctx, cancel := context.WithCancel(ctx)
+	c, _, calls = retryServer(t, []func(http.ResponseWriter){status(429, "")})
+	c.sleep = func(ctx context.Context, d time.Duration) error { cancel(); return context.Canceled }
+	if _, err := c.Chat(cctx, "s", "u", 0); err == nil || *calls != 1 || !strings.Contains(err.Error(), "while waiting to retry") {
+		t.Fatalf("cancel: %v calls=%d", err, *calls)
+	}
+}
+
+func TestBackoffBounds(t *testing.T) {
+	c := New(config.Endpoint{})
+	c.Retry = config.Retry{MaxAttempts: 8, InitialBackoff: 1, MaxBackoff: 10}
+	for attempt := 1; attempt <= 20; attempt++ {
+		if d := c.backoff(attempt, 0); d <= 0 || d > 10*time.Second {
+			t.Fatalf("attempt %d: %v", attempt, d)
+		}
+	}
+	if d := c.backoff(1, 15*time.Second); d != 15*time.Second {
+		t.Fatalf("retry-after should win: %v", d)
+	}
+	if d := c.backoff(1, time.Hour); d != 20*time.Second {
+		t.Fatalf("absurd retry-after should be capped: %v", d)
+	}
+	h := http.Header{}
+	h.Set("Retry-After", time.Now().Add(30*time.Second).UTC().Format(http.TimeFormat))
+	if d := parseRetryAfter(h); d < 25*time.Second || d > 31*time.Second {
+		t.Fatalf("http date: %v", d)
+	}
+}
+
+func TestErrorDetail(t *testing.T) {
+	// Verbatim shape of an OpenRouter 429 relayed from an upstream provider.
+	body := `{"error":{"message":"HTTP 429: {\"error\":{\"message\":\"You have exceeded your rate limit for this API. Please try again later. For more information, see https://docs.fireworks.ai/guides/quotas_usage/rate-limits.\",\"param\":null,\"code\":\"RATE_LIMIT_EXCEEDED\",\"type\":\"error\"},\"request_id\":\"embd-b662ec60d41a4fa4a3aa0014ef34622b\"}","code":429}}`
+	got := errorDetail([]byte(body))
+	want := "HTTP 429: You have exceeded your rate limit for this API. Please try again later. For more information, see https://docs.fireworks.ai/guides/quotas_usage/rate-limits. [code RATE_LIMIT_EXCEEDED, type error, request embd-b662ec60d41a4fa4a3aa0014ef34622b]"
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+	// Provider metadata is appended; plain messages pass through.
+	got = errorDetail([]byte(`{"error":{"code":502,"message":"Provider returned error","metadata":{"provider_name":"Fireworks","raw":"upstream exploded"}}}`))
+	if got != "Provider returned error (provider Fireworks; raw: upstream exploded)" {
+		t.Fatalf("metadata: %s", got)
+	}
+	// Non JSON bodies are returned in full, however long.
+	long := strings.Repeat("<html>", 500)
+	if errorDetail([]byte(long+"\n")) != long {
+		t.Fatal("long body was altered")
+	}
+	// The full detail reaches the caller.
+	c, _, _ := retryServer(t, []func(http.ResponseWriter){func(w http.ResponseWriter) {
+		w.WriteHeader(400)
+		fmt.Fprint(w, body)
+	}})
+	_, err := c.Chat(context.Background(), "s", "u", 0)
+	if err == nil || !strings.Contains(err.Error(), "400 Bad Request: "+want) {
+		t.Fatalf("surfaced error: %v", err)
 	}
 }

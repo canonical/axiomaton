@@ -46,6 +46,7 @@ Usage:
   ax [global flags] add <date> <subject> [clock values...] "<statement>"
   ax [global flags] update <subject>
   ax [global flags] subjects
+  ax [global flags] setup
 
 Commands:
   since     Render the axioms for a subject that became true after <date>,
@@ -54,6 +55,7 @@ Commands:
   add       Append an axiom to the nearest writeable axiomlog.
   update    Run containerised agents to extend the log of a built-in subject.
   subjects  List known subjects and where they come from.
+  setup     Write ax.cnf interactively and test the configured models.
 
 Global flags:
 `
@@ -111,6 +113,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return a.update(ctx, rest[1:])
 	case "subjects":
 		return a.subjects(ctx, rest[1:])
+	case "setup":
+		return a.setup(ctx, rest[1:])
 	case "help", "-h", "--help":
 		fs.Usage()
 		return flag.ErrHelp
@@ -262,7 +266,7 @@ func (a *app) since(ctx context.Context, args []string) error {
 			return fmt.Errorf("-s: %w", err)
 		}
 		a.logf("summarising with %s (budget %d tokens)", ep.Model, e.cfg.SummaryBudget)
-		md, err = openrouter.New(ep).Summarise(ctx, md, e.cfg.SummaryBudget)
+		md, err = a.client(e.cfg, ep).Summarise(ctx, md, e.cfg.SummaryBudget)
 		if err != nil {
 			return err
 		}
@@ -280,6 +284,11 @@ func describeShape(shape []axiom.ClockShape) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
+// client builds an OpenRouter client with the configured retry policy.
+func (a *app) client(cfg config.User, ep config.Endpoint) *openrouter.Client {
+	return openrouter.New(ep).WithRetry(cfg.Retry, a.logf)
+}
+
 // resolver builds the model set for queries, degrading to deterministic mode
 // when roles are missing.
 func (a *app) resolver(cfg config.User) query.Resolver {
@@ -289,22 +298,22 @@ func (a *app) resolver(cfg config.User) query.Resolver {
 	}
 	cache := models.Cache{Dir: config.CacheDir()}
 	if ep, err := cfg.Resolve(config.RoleEmbedding); err == nil {
-		res.Embedder = models.CachedEmbedder{Embedder: openrouter.New(ep), Cache: cache}
+		res.Embedder = models.CachedEmbedder{Embedder: a.client(cfg, ep), Cache: cache}
 	} else {
 		a.logf("%v", err)
 	}
 	if ep, err := cfg.Resolve(config.RoleDecision); err == nil {
-		res.Decider = models.CachedDecider{Decider: openrouter.New(ep), Cache: cache}
+		res.Decider = models.CachedDecider{Decider: a.client(cfg, ep), Cache: cache}
 	} else {
 		a.logf("%v", err)
 	}
 	if ep, err := cfg.Resolve(config.RoleRerank); err == nil {
-		res.Reranker = models.CachedReranker{Reranker: openrouter.New(ep), Cache: cache}
+		res.Reranker = models.CachedReranker{Reranker: a.client(cfg, ep), Cache: cache}
 	} else if !errors.Is(err, config.ErrNotConfigured) {
 		a.logf("%v", err)
 	}
 	if res.Embedder == nil || res.Decider == nil {
-		a.warnf("embedding and decision models are not both configured in %s; contradictions will not be resolved", a.configPath)
+		a.warnf("embedding and decision models are not both configured in %s; contradictions will not be resolved (run ax setup)", a.configPath)
 	}
 	return res
 }
@@ -420,7 +429,7 @@ func (a *app) update(ctx context.Context, args []string) error {
 	u := &update.Updater{
 		Subject:     builtin,
 		Runtime:     update.Podman{Image: img, Log: a.logf},
-		Agent:       update.FrameworkAgent{Endpoint: ep, MaxIterations: e.cfg.Update.MaxIterations, Logger: logger},
+		Agent:       update.FrameworkAgent{Endpoint: ep, MaxIterations: e.cfg.Update.MaxIterations, MaxRetries: e.cfg.Retry.MaxAttempts - 1, Logger: logger},
 		ExecTimeout: time.Duration(e.cfg.Update.ExecTimeout) * time.Second,
 		Log:         progress,
 	}

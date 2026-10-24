@@ -65,7 +65,16 @@ decisions etc. in `$XDG_CACHE_HOME/axiomaton/`. Without an embedding and decisio
 model configured (or with `--offline`), the deterministic output is still produced
 but superseded axioms are not detected.
 
-Configuration of `ax` is stored in `$XDG_CONFIG_HOME/axiomaton/ax.cnf`. It defines
+Configuration of `ax` is stored in `$XDG_CONFIG_HOME/axiomaton/ax.cnf`. Run
+`ax setup` to create it: on a terminal it asks for the provider URL, API key
+and a model for each role, writes the file and then sends a tiny request to
+each configured model (and looks for podman) to confirm everything works.
+Every answer has a flag (`-base-url`, `-key` or `-key-env`, `-embedding`,
+`-rerank`, `-decision`, `-summary`, `-agent`, `-image`), `-y` accepts the
+defaults without prompting, `-force` replaces an existing file and `-no-check`
+skips the connectivity test. A key given with `-key` is stored in the file,
+which is then made readable by the owner only; otherwise the key is read from
+the environment variable at run time. The file defines
 the model configuration for each model used, e.g. provider (e.g. OpenRouter),
 the model and authentication details. It requires an embedding/reranking model,
 decision model and two general purpose LLM models, one for summarisation (a low
@@ -90,13 +99,20 @@ search:
   rerank_top_n: 5
   min_relevance: 0.1
   decision_threshold: 0.5           # minimum probability to accept a verdict
+retry:
+  max_attempts: 8                   # tries per model request
+  initial_backoff: 1                # seconds; doubles each attempt, with jitter
+  max_backoff: 60                   # seconds
 update:
   image: public.ecr.aws/ubuntu/ubuntu:latest
   max_iterations: 80                # tool calls per agent run
   exec_timeout: 300                 # seconds per command in the container
 ```
 
-Any model may set its own `provider`, `base_url`, `api_key` or `api_key_env`.
+Requests that fail with 429, 5xx or a dropped connection are retried with
+exponential backoff and full jitter, honouring any `Retry-After` the provider
+sends; `-v` logs each retry. Any model may set its own `provider`, `base_url`,
+`api_key` or `api_key_env`.
 Embeddings, rerank and chat use the OpenAI compatible `/v1` endpoints, so an
 OpenAI compatible server works for those roles; the decision role uses the
 OpenRouter Decisions API.
@@ -105,6 +121,7 @@ The `ax` tool also contains these other commands:
 - `ax add 2026-08-19 golang 1.27.0 "a method declaration may declare its own type parameters."`
 - `ax update golang`
 - `ax subjects`
+- `ax setup`
 
 `add` and `update` append to the nearest writeable `axiomlog` inside the
 repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the

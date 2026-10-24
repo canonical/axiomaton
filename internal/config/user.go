@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -77,12 +78,29 @@ type Update struct {
 	ExecTimeout int `yaml:"exec_timeout"`
 }
 
+// Retry tunes how model requests are retried after rate limits and
+// transient failures. Backoff is exponential with full jitter, capped at
+// MaxBackoff, and a Retry-After header from the server is honoured.
+type Retry struct {
+	// MaxAttempts is the total number of tries per request.
+	MaxAttempts int `yaml:"max_attempts"`
+	// InitialBackoff is the first delay ceiling, in seconds.
+	InitialBackoff float64 `yaml:"initial_backoff"`
+	// MaxBackoff caps the delay between attempts, in seconds.
+	MaxBackoff float64 `yaml:"max_backoff"`
+}
+
+// Initial and Max return the backoff bounds as durations.
+func (r Retry) Initial() time.Duration { return time.Duration(r.InitialBackoff * float64(time.Second)) }
+func (r Retry) Max() time.Duration     { return time.Duration(r.MaxBackoff * float64(time.Second)) }
+
 // User is the parsed ax.cnf.
 type User struct {
 	Providers     map[string]Provider `yaml:"providers"`
 	Models        map[string]Model    `yaml:"models"`
 	SummaryBudget int                 `yaml:"summary_budget"`
 	Search        Search              `yaml:"search"`
+	Retry         Retry               `yaml:"retry"`
 	Update        Update              `yaml:"update"`
 
 	// Path is where the config was read from, or empty if defaults are in use.
@@ -103,6 +121,11 @@ func DefaultUser() User {
 			RerankTopN:        5,
 			MinRelevance:      0.1,
 			DecisionThreshold: 0.5,
+		},
+		Retry: Retry{
+			MaxAttempts:    8,
+			InitialBackoff: 1,
+			MaxBackoff:     60,
 		},
 		Update: Update{
 			Image:         "public.ecr.aws/ubuntu/ubuntu:latest",
@@ -165,6 +188,15 @@ func (u *User) merge(o User) {
 	}
 	if o.Search.DecisionThreshold > 0 {
 		u.Search.DecisionThreshold = o.Search.DecisionThreshold
+	}
+	if o.Retry.MaxAttempts > 0 {
+		u.Retry.MaxAttempts = o.Retry.MaxAttempts
+	}
+	if o.Retry.InitialBackoff > 0 {
+		u.Retry.InitialBackoff = o.Retry.InitialBackoff
+	}
+	if o.Retry.MaxBackoff > 0 {
+		u.Retry.MaxBackoff = o.Retry.MaxBackoff
 	}
 	if o.Update.Image != "" {
 		u.Update.Image = o.Update.Image
