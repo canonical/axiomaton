@@ -121,6 +121,9 @@ func (f *fakeAgent) Run(_ context.Context, instructions, task string, tools []to
 		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is dubious", Source: "https://go.dev/doc/go1.28"})
 		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is nearly true", Source: "https://go.dev/doc/go1.28"})
 		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is slightly off", Source: "https://go.dev/doc/go1.28"})
+		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is misdated", Source: "https://go.dev/doc/go1.28"})
+		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is ancient", Source: "https://go.dev/doc/go1.28"})
+		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is badly clocked", Source: "https://go.dev/doc/go1.28"})
 		// Duplicate and invalid proposals must be rejected, not crash.
 		if r := call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is true"}); !strings.Contains(r, "already recorded") {
 			f.t.Fatalf("duplicate not rejected: %s", r)
@@ -166,6 +169,24 @@ func (f *fakeAgent) Run(_ context.Context, instructions, task string, tools []to
 		v.Correction = "this is still off"
 	case strings.Contains(task, "Statement: this is still off"):
 		v.Reason = "also wrong"
+	case strings.Contains(task, "Statement: this is misdated") && strings.Contains(task, "Go release: 1.28.1 (released 2027-03-02)"):
+		// The re-confirmation of the corrected date and clock.
+		v.Confirmed = true
+		v.Reason = "right release now"
+	case strings.Contains(task, "Statement: this is misdated"):
+		// The statement is fine; the release and date are not. A clock
+		// equal to the proposal's is noise and dropped.
+		v.Reason = "wrong release"
+		v.Date = "2027-03-02"
+		v.Clock = []string{"1.28.1"}
+	case strings.Contains(task, "Statement: this is ancient"):
+		// Dated before the epoch: prior knowledge, dropped.
+		v.Reason = "this shipped long ago"
+		v.Date = "2019-02-25"
+		v.Clock = []string{"1.12.0"}
+	case strings.Contains(task, "Statement: this is badly clocked"):
+		v.Reason = "wrong release"
+		v.Clock = []string{"banana"}
 	default:
 		v.Reason = "checked"
 	}
@@ -183,12 +204,14 @@ func TestUpdaterRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One update run, five confirmations and two re-confirmations of
-	// suggested corrections.
-	if summary != "covered 1.28.0" || len(props) != 5 || ag.count() != 8 {
+	// One update run, eight confirmations and three re-confirmations of
+	// suggested corrections (nearly true, slightly off, misdated); the
+	// ancient proposal is dropped as prior knowledge without one, and the
+	// unusable clock suggestion is left for review.
+	if summary != "covered 1.28.0" || len(props) != 7 || ag.count() != 12 {
 		t.Fatalf("props=%d summary=%q runs=%d", len(props), summary, ag.count())
 	}
-	if rt.count() != 8 || rt.peak != 1 {
+	if rt.count() != 12 || rt.peak != 1 {
 		t.Fatalf("expected a fresh container per agent, one at a time, got %d (peak %d)", rt.count(), rt.peak)
 	}
 	for _, c := range rt.started {
@@ -197,8 +220,16 @@ func TestUpdaterRun(t *testing.T) {
 		}
 	}
 	confirmed, pending := Split(props)
-	if len(confirmed) != 2 || confirmed[0].Statement != "this is true" || confirmed[0].By != "agent" {
+	if len(confirmed) != 3 || confirmed[0].Statement != "this is true" || confirmed[0].By != "agent" {
 		t.Fatalf("confirmed: %+v", confirmed)
+	}
+	if c := confirmed[2]; c.Statement != "this is misdated" || c.Time.Format("2006-01-02") != "2027-03-02" || c.Clock["version"] != "1.28.1" || c.By != "agent" {
+		t.Fatalf("date and clock correction: %+v", c)
+	}
+	for _, p := range props {
+		if p.Axiom.Statement == "this is ancient" {
+			t.Fatalf("pre-epoch correction should drop the proposal: %+v", p)
+		}
 	}
 	if confirmed[1].Statement != "this is exactly true" || confirmed[1].By != "agent" || confirmed[1].Source != "https://go.dev/doc/go1.28" || confirmed[1].ID == "" {
 		t.Fatalf("corrected axiom: %+v", confirmed[1])
@@ -206,28 +237,40 @@ func TestUpdaterRun(t *testing.T) {
 	if props[2].Original == nil || props[2].Original.Statement != "this is nearly true" || props[2].Verdict.Correction != "" || !props[2].Verdict.Confirmed {
 		t.Fatalf("corrected proposal should keep the original: %+v", props[2])
 	}
-	if len(pending) != 3 || pending[0].Axiom.Statement != "this is dubious" || pending[0].Verdict.Suggests() || pending[2].Axiom.Statement != "on the epoch" {
+	if len(pending) != 4 || pending[0].Axiom.Statement != "this is dubious" || pending[0].Verdict.Suggests() || pending[3].Axiom.Statement != "on the epoch" {
 		t.Fatalf("pending: %+v", pending)
+	}
+	if p := pending[2]; p.Axiom.Statement != "this is badly clocked" || !p.Verdict.Suggests() || p.Verdict.Suggestion() != "clock: banana" {
+		t.Fatalf("unusable suggestion stays for review: %+v", p)
 	}
 	if p := pending[1]; p.Axiom.Statement != "this is slightly off" || !p.Verdict.Suggests() || p.Verdict.Correction != "this is still off" || p.Original != nil {
 		t.Fatalf("unconfirmed correction should stay a suggestion: %+v", p)
 	}
 
 	var out strings.Builder
-	accepted, err := Review(pending, strings.NewReader("c\n?\ne\nedited statement\nc\nn\n"), &out, b.Shape())
+	accepted, err := Review(pending, strings.NewReader("c\n?\ne\nedited statement\nc\nc\nn\nn\n"), &out, b.Shape())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(accepted) != 2 || accepted[0].Statement != "edited statement" || accepted[0].By != "user" || accepted[1].Statement != "this is still off" || accepted[1].By != "user" {
 		t.Fatalf("accepted: %+v", accepted)
 	}
-	if o := out.String(); !strings.Contains(o, "not confirmed: checked") || !strings.Contains(o, "inaccurate: wrong release\n  suggested instead: this is still off") || !strings.Contains(o, "[y/n/c=suggestion/e/q]") {
+	if o := out.String(); !strings.Contains(o, "not confirmed: checked") || !strings.Contains(o, "inaccurate: wrong release\n  suggested statement: this is still off") || !strings.Contains(o, "[y/n/c=suggestion/e/q]") || !strings.Contains(o, "suggested clock: banana") || !strings.Contains(o, `cannot apply the suggestion: suggested clock: subject go dimension version: "banana" is not a Go version`) {
 		t.Fatalf("review output:\n%s", o)
 	}
 	if strings.Count(out.String(), "[y/n/e/q]") < 2 {
 		t.Fatalf("c without a suggestion should re-prompt:\n%s", out.String())
 	}
-	accepted, _ = Review(pending, strings.NewReader("n\nn\nn\n"), &out, b.Shape())
+	// A date and clock suggestion is applied by c.
+	dated := Proposal{Axiom: pending[0].Axiom, Verdict: Verdict{Reason: "wrong release", Date: "2027-03-02", Clock: []string{"1.28.1"}}}
+	accepted, _ = Review([]Proposal{dated}, strings.NewReader("c\n"), &out, b.Shape())
+	if len(accepted) != 1 || accepted[0].Statement != "this is dubious" || accepted[0].Time.Format("2006-01-02") != "2027-03-02" || accepted[0].Clock["version"] != "1.28.1" {
+		t.Fatalf("dated suggestion: %+v", accepted)
+	}
+	if !strings.Contains(out.String(), "suggested date: 2027-03-02\n  suggested clock: 1.28.1") {
+		t.Fatalf("review output:\n%s", out.String())
+	}
+	accepted, _ = Review(pending, strings.NewReader("n\nn\nn\nn\n"), &out, b.Shape())
 	if len(accepted) != 0 {
 		t.Fatal("declined should not be accepted")
 	}
@@ -237,8 +280,33 @@ func TestUpdaterRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
-	if !strings.Contains(string(data), `"correction":"this is still off"`) {
+	if !strings.Contains(string(data), `"correction":"this is still off"`) || !strings.Contains(string(data), `"clock":["banana"]`) {
 		t.Fatalf("pending file lacks the suggestion:\n%s", data)
+	}
+}
+
+func TestCorrected(t *testing.T) {
+	subject := axiom.Subject{Name: "go", Shape: []axiom.ClockShape{{Name: "version", Kind: axiom.KindGoVersion}}}
+	base := axiom.Axiom{Subject: "go", Time: time.Date(2027, 2, 9, 0, 0, 0, 0, time.UTC), Clock: map[string]string{"version": "1.28.0"}, Statement: "s", Source: "u"}
+	base.Normalise()
+	if _, err := (Proposal{Axiom: base, Verdict: Verdict{Date: "yesterday"}}).Corrected(subject); err == nil || !strings.Contains(err.Error(), "YYYY-MM-DD") {
+		t.Fatalf("bad date: %v", err)
+	}
+	if _, err := (Proposal{Axiom: base, Verdict: Verdict{Date: "2023-08-01"}}).Corrected(subject); err != ErrPriorKnowledge {
+		t.Fatalf("epoch: %v", err)
+	}
+	if _, err := (Proposal{Axiom: base, Verdict: Verdict{Clock: []string{"1.28.0", "extra"}}}).Corrected(subject); err == nil {
+		t.Fatal("too many clock values")
+	}
+	if _, err := (Proposal{Axiom: base, Verdict: Verdict{Correction: "s", Clock: []string{"1.28"}}}).Corrected(subject); err == nil || !strings.Contains(err.Error(), "changes nothing") {
+		t.Fatalf("no-op: %v", err)
+	}
+	fixed, err := (Proposal{Axiom: base, Verdict: Verdict{Correction: " t ", Date: "2027-03-02", Clock: []string{"1.28.1"}}}).Corrected(subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixed.Axiom.Statement != "t" || fixed.Axiom.Clock["version"] != "1.28.1" || fixed.Axiom.Time.Day() != 2 || fixed.Axiom.Source != "u" || fixed.Original.ID != base.ID || fixed.Axiom.ID == base.ID {
+		t.Fatalf("fixed: %+v", fixed)
 	}
 }
 
@@ -260,7 +328,9 @@ func TestCorrectionAlreadyKnown(t *testing.T) {
 			t.Fatalf("known correction should be dropped: %+v", p)
 		}
 	}
-	if len(props) != 4 || ag.count() != 7 {
+	// Eight proposals less the known correction and the ancient one; one
+	// update run, eight confirmations and two re-confirmations.
+	if len(props) != 6 || ag.count() != 11 {
 		t.Fatalf("props=%d runs=%d", len(props), ag.count())
 	}
 }
@@ -305,10 +375,10 @@ func TestParallelConfirmation(t *testing.T) {
 	for _, p := range props {
 		order = append(order, p.Axiom.Statement)
 	}
-	if got := strings.Join(order, "|"); got != "this is true|this is dubious|this is exactly true|this is slightly off|on the epoch" {
+	if got := strings.Join(order, "|"); got != "this is true|this is dubious|this is exactly true|this is slightly off|this is misdated|this is badly clocked|on the epoch" {
 		t.Fatalf("order: %s", got)
 	}
-	if rt.count() != 8 {
+	if rt.count() != 12 {
 		t.Fatalf("containers: %d", rt.count())
 	}
 

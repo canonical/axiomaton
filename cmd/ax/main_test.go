@@ -286,8 +286,10 @@ func TestInit(t *testing.T) {
 	if err != nil || !strings.Contains(errOut, "rust @ 1.80 (from Cargo.toml)") {
 		t.Fatalf("rust init: %v %s", err, errOut)
 	}
-	out, errOut, err = exec(crate, "since", "2025-08-01")
-	if err != nil || !strings.Contains(errOut, `no axioms known for subject "rust" (run ax update rust)`) || strings.Contains(out, "## rust") {
+	// Nothing in the built-in rust log is both after the cutoff and within
+	// rust-version 1.80, so the subject is omitted.
+	out, errOut, err = exec(crate, "-v", "since", "2025-08-01")
+	if err != nil || !strings.Contains(errOut, `nothing to report for subject "rust"; omitted`) || strings.Contains(out, "## rust") {
 		t.Fatalf("rust since: %v\n%s\n%s", err, out, errOut)
 	}
 	if _, _, err = exec(crate, "add", "2026-01-15", "rust", "1.90.0", "rust fact"); err != nil {
@@ -309,6 +311,28 @@ func TestInit(t *testing.T) {
 	cnf, _ = os.ReadFile(filepath.Join(crate, "axiomaton.cnf"))
 	if !strings.Contains(string(cnf), "  - rust  # detected from Cargo.toml; no version pinned, so every release is reported") {
 		t.Fatalf("cnf:\n%s", cnf)
+	}
+
+	// A Python project: detected from pyproject.toml, clocked by the
+	// requires-python lower bound, and bounded by it in reports.
+	py := filepath.Join(root, "py")
+	os.MkdirAll(filepath.Join(py, ".git"), 0o755)
+	os.WriteFile(filepath.Join(py, "pyproject.toml"), []byte("[project]\nname = \"p\"\nrequires-python = \">=3.12\"\n"), 0o644)
+	_, errOut, err = exec(py, "init")
+	if err != nil || !strings.Contains(errOut, "python @ 3.12 (from pyproject.toml)") {
+		t.Fatalf("python init: %v %s", err, errOut)
+	}
+	if _, _, err = exec(py, "add", "2024-10-07", "python", "3.13.0", "python fact"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = exec(py, "since", "2024-01-01")
+	if strings.Contains(out, "python fact") {
+		t.Fatalf("3.13.0 axiom must not apply at requires-python 3.12:\n%s", out)
+	}
+	os.WriteFile(filepath.Join(py, ".python-version"), []byte("3.13.1\n"), 0o644)
+	out, _, _ = exec(py, "since", "2024-01-01")
+	if !strings.Contains(out, "## python (version <= 3.13.1)") || !strings.Contains(out, "- **[3.13.0]** python fact") {
+		t.Fatalf("pinned interpreter:\n%s", out)
 	}
 	_, errOut, err = exec(other, "init", "-force", "go")
 	if err != nil || !strings.Contains(errOut, "ax:   go") {

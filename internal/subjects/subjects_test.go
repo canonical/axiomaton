@@ -26,19 +26,23 @@ func TestSeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One seed per enumerable built-in, in name order: go then rust (whose
-	// seed is empty until generated).
-	if len(seeds) != 2 || len(seeds[0]) < 20 || len(seeds[1]) != 0 {
-		t.Fatalf("unexpected seeds: %d", len(seeds))
+	// One seed per enumerable built-in, in name order, each holding only
+	// its own subject's axioms. Seeds other than go may be empty until
+	// generated with ax update.
+	names := staticNames()
+	if len(seeds) != len(names) || strings.Join(names, ",") != "go,python,rust" || len(seeds[0]) < 20 {
+		t.Fatalf("unexpected seeds: %d for %v", len(seeds), names)
+	}
+	for i, seed := range seeds {
+		for _, a := range seed {
+			if a.Subject != names[i] || a.Clock["version"] == "" {
+				t.Fatalf("bad %s seed axiom %+v", names[i], a)
+			}
+		}
 	}
 	b, ok := Lookup("go")
 	if !ok || b.Shape()[0].Name != "version" {
 		t.Fatal("go lookup")
-	}
-	for _, a := range seeds[0] {
-		if a.Subject != "go" || a.Clock["version"] == "" {
-			t.Fatalf("bad seed axiom %+v", a)
-		}
 	}
 	task := b.UpdateTask(seeds[0])
 	if !strings.Contains(task, "newest Go release it covers is 1.27.0") {
@@ -47,7 +51,7 @@ func TestSeeds(t *testing.T) {
 }
 
 func TestFamilies(t *testing.T) {
-	if got := strings.Join(Names(), ","); got != "go,rust,go:<module path>" {
+	if got := strings.Join(Names(), ","); got != "go,python,rust,go:<module path>" {
 		t.Fatalf("names: %s", got)
 	}
 	b, ok := Lookup("go:golang.org/x/net")
@@ -99,5 +103,10 @@ func TestDetect(t *testing.T) {
 	}
 	if b, ok := Lookup("rust"); !ok || b.Shape()[0].Kind != "semver" {
 		t.Fatal("rust lookup")
+	}
+	os.WriteFile(filepath.Join(repo, "pyproject.toml"), []byte("[project]\nrequires-python = \">=3.12\"\n"), 0o644)
+	d = Detect(repo)
+	if len(d) != 2 || d[0].Subject.Name() != "python" || d[0].Clock[0] != "3.12" || d[1].Subject.Name() != "rust" {
+		t.Fatalf("python and rust: %+v", d)
 	}
 }

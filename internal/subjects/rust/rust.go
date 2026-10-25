@@ -89,7 +89,7 @@ func toolchainVersion(path string) string {
 	}
 	var channel string
 	if strings.HasSuffix(path, ".toml") {
-		channel = tomlString(string(data), "toolchain", "channel")
+		channel = detect.TOMLString(string(data), "toolchain", "channel")
 	} else {
 		channel = strings.TrimSpace(string(data))
 	}
@@ -108,13 +108,13 @@ func rustVersion(manifest string) (version, source string) {
 		return "", ""
 	}
 	text := string(data)
-	if v := tomlString(text, "package", "rust-version"); releaseVersion.MatchString(v) {
+	if v := detect.TOMLString(text, "package", "rust-version"); releaseVersion.MatchString(v) {
 		return v, manifest
 	}
-	if v := tomlString(text, "workspace.package", "rust-version"); releaseVersion.MatchString(v) {
+	if v := detect.TOMLString(text, "workspace.package", "rust-version"); releaseVersion.MatchString(v) {
 		return v, manifest
 	}
-	if !tomlInherits(text, "package", "rust-version") {
+	if !detect.TOMLInherits(text, "package", "rust-version") {
 		return "", ""
 	}
 	dir := filepath.Dir(manifest)
@@ -129,96 +129,11 @@ func rustVersion(manifest string) (version, source string) {
 		if err != nil {
 			continue
 		}
-		if v := tomlString(string(rootData), "workspace.package", "rust-version"); releaseVersion.MatchString(v) {
+		if v := detect.TOMLString(string(rootData), "workspace.package", "rust-version"); releaseVersion.MatchString(v) {
 			return v, root
 		}
 	}
 	return "", ""
-}
-
-var (
-	tomlHeader = regexp.MustCompile(`^\[\s*([^\]]+?)\s*\]`)
-	tomlPair   = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\s*=\s*(.+?)\s*$`)
-)
-
-// tomlString returns the string value of key in table, or "". It
-// understands the subset of TOML these manifests use: [table] headers,
-// key = "value" pairs and # comments. Dotted keys and inline tables are
-// handled only as far as tomlInherits needs.
-func tomlString(text, table, key string) string {
-	section := ""
-	for line := range strings.SplitSeq(text, "\n") {
-		line = stripComment(line)
-		if line == "" {
-			continue
-		}
-		if m := tomlHeader.FindStringSubmatch(line); m != nil {
-			section = m[1]
-			continue
-		}
-		if section != table {
-			continue
-		}
-		m := tomlPair.FindStringSubmatch(line)
-		if m == nil || m[1] != key {
-			continue
-		}
-		v := m[2]
-		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
-			return v[1 : len(v)-1]
-		}
-		return ""
-	}
-	return ""
-}
-
-// tomlInherits reports whether key in table is set from the workspace,
-// written either as key.workspace = true or key = { workspace = true }.
-func tomlInherits(text, table, key string) bool {
-	section := ""
-	for line := range strings.SplitSeq(text, "\n") {
-		line = stripComment(line)
-		if line == "" {
-			continue
-		}
-		if m := tomlHeader.FindStringSubmatch(line); m != nil {
-			section = m[1]
-			continue
-		}
-		if section != table {
-			continue
-		}
-		m := tomlPair.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		if m[1] == key+".workspace" && m[2] == "true" {
-			return true
-		}
-		if m[1] == key && strings.HasPrefix(m[2], "{") && strings.Contains(strings.ReplaceAll(m[2], " ", ""), "workspace=true") {
-			return true
-		}
-	}
-	return false
-}
-
-// stripComment removes a trailing # comment that is outside quotes.
-func stripComment(line string) string {
-	inQuote := byte(0)
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		switch {
-		case inQuote != 0:
-			if c == inQuote {
-				inQuote = 0
-			}
-		case c == '"' || c == '\'':
-			inQuote = c
-		case c == '#':
-			return strings.TrimSpace(line[:i])
-		}
-	}
-	return strings.TrimSpace(line)
 }
 
 func (Subject) UpdateInstructions() string {
@@ -323,8 +238,11 @@ condition that matters) and you have verified what is actually true, provide
 the corrected statement as the correction: one or two self-contained
 sentences in the same style, true for the stated release, that you would
 confirm yourself. If the statement is unfounded, that is nothing like it is
-true or you could not establish what is true, leave the correction empty and
-say so in the reason.`
+true or you could not establish what is true, leave every correction empty
+and say so in the reason. When the fault is the release or the date rather
+than the wording, keep the statement as it is and give the correct date
+(YYYY-MM-DD) and clock (the release) instead; both may be combined with a
+corrected statement.`
 }
 
 func (Subject) ConfirmTask(a axiom.Axiom) string {
@@ -337,7 +255,8 @@ Claimed source: %s
 Investigate, then call the submit_answer tool with confirmed true or false,
 a one or two sentence reason citing what you checked, and, only when the
 statement is inaccurate rather than unfounded, a correction giving the
-verified statement that should replace it.`,
+verified statement that should replace it and/or the correct date and clock
+when the release or date is what is wrong.`,
 		a.Clock["version"], a.Time.Format("2006-01-02"), a.Statement, a.Source)
 }
 

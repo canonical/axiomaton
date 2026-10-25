@@ -95,26 +95,16 @@ func TestDetect(t *testing.T) {
 	}
 }
 
-func TestToml(t *testing.T) {
-	text := "title = \"x # not a comment\"\n[package]\nname = 'q'\nrust-version = \"1.70\" # trailing\n[other]\nrust-version = \"9.9\"\n"
-	if v := tomlString(text, "package", "rust-version"); v != "1.70" {
-		t.Fatalf("got %q", v)
-	}
-	if v := tomlString(text, "package", "name"); v != "q" {
-		t.Fatalf("single quotes: %q", v)
-	}
-	if v := tomlString(text, "missing", "rust-version"); v != "" {
-		t.Fatalf("missing table: %q", v)
-	}
-	if stripComment(`a = "x # y" # z`) != `a = "x # y"` {
-		t.Fatal("comment inside quotes")
-	}
-}
-
 func TestPrompts(t *testing.T) {
 	s := Subject{}
-	if seed, err := s.Seed(); err != nil || len(seed) != 0 {
-		t.Fatalf("seed: %d %v", len(seed), err)
+	seed, err := s.Seed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range seed {
+		if a.Subject != Name || a.Clock["version"] == "" {
+			t.Fatalf("bad seed axiom: %+v", a)
+		}
 	}
 	ins := s.UpdateInstructions()
 	for _, want := range []string{"RELEASES.md", "propose_axiom", "append-only log", "sh.rustup.rs"} {

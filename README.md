@@ -69,14 +69,18 @@ Run `ax init` in a project to create its `axiomaton.cnf` (and an empty
 and every direct requirement in that `go.mod` adds a
 `go:<module path>` subject (e.g. `go:golang.org/x/net`);
 indirect requirements are skipped. `rust` is listed when a `Cargo.toml` is
-found the same way. Detected subjects are written without a
+found the same way, and `python` when a `pyproject.toml`, `setup.py`,
+`setup.cfg`, `Pipfile` or `requirements.txt` is. Detected subjects are written without a
 clock, and a built-in subject named without a clock, in the file or on the
 command line, takes its clock from the project at query time (`go` uses
 the `go` directive in `go.mod`; `go:<module>` uses that module's
 `require` line; `rust` uses the release pinned in `rust-toolchain.toml` or
 `rust-toolchain`, else the package's `rust-version`, following a workspace
-inheritance to the workspace root), so the file never goes stale. A Rust
-project that pins neither is reported without a clock, i.e. every release.
+inheritance to the workspace root; `python` uses the release pinned in
+`.python-version`, else the lower bound of `requires-python` in
+`pyproject.toml`, a Poetry `python` constraint, or a Pipfile
+`python_version`), so the file never goes stale. A project that pins
+nothing is reported without a clock, i.e. every release.
 Give an explicit clock to pin a version instead. Further built-in subjects can
 be named as arguments, e.g. `ax init go go:golang.org/x/text`, and
 dependencies you do not want reported on can simply be deleted from the file.
@@ -176,6 +180,7 @@ The `ax` tool also contains these other commands:
 - `ax add 2026-08-19 go 1.27.0 "a method declaration may declare its own type parameters."`
 - `ax update go`
 - `ax update rust`
+- `ax update python`
 - `ax update go:golang.org/x/net`
 - `ax subjects`
 - `ax init`
@@ -185,8 +190,8 @@ The `ax` tool also contains these other commands:
 repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
 repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
-The update command only works for built-in subjects: `go`, `rust`, and
-`go:<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
+The update command only works for built-in subjects: `go`, `python`, `rust`,
+and `go:<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
 agent is run (using github.com/microsoft/agent-framework-go, running a podman container,
 with tool calls running inside the container via podman exec), to update the axiomlog
 based on go's release notes. For a module subject the agent takes the release
@@ -201,22 +206,29 @@ the CPUs by default, or `-j n` on the command line), each in its own
 container, and the results keep the proposal order. Only axioms
 that are confirmed are added automatically, axioms that are not confirmed require
 user input. A confirmation agent that rejects a statement says which kind of
-rejection it is: an *inaccurate* statement (wrong release, identifier or scope,
-overstated or incomplete) comes back with a corrected statement the agent did
-verify, while an *unfounded* one comes back with no suggestion. A correction
-is confirmed once more by a fresh agent and, if that succeeds, is appended in
-place of the proposal (the original is kept in the pending record). On a
-terminal the user is asked about each remaining proposal, with `c` accepting
-the suggested correction where there is one; otherwise they are written to
-`<axiomlog>.pending` (suggestions under `verdict.correction`) for later
-review, or accepted with `-y`, which takes the suggestion over the original
-when the agent offered one.
+rejection it is: an *inaccurate* axiom (wrong release or date, wrong
+identifier or scope, overstated or incomplete) comes back with a correction
+the agent did verify, which may be a corrected statement, a corrected date,
+a corrected clock (release) or any combination, while an *unfounded* one
+comes back with no suggestion. A correction is validated (the clock against
+the subject's shape; a date on or before the global epoch drops the proposal
+as prior knowledge), confirmed once more by a fresh agent and, if that
+succeeds, appended in place of the proposal (the original is kept in the
+pending record). On a terminal the user is asked about each remaining
+proposal, with `c` accepting the suggested correction where there is one;
+otherwise they are written to `<axiomlog>.pending` (suggestions under
+`verdict.correction`, `verdict.date` and `verdict.clock`) for later review,
+or accepted with `-y`, which takes the suggestion over the original when the
+agent offered a usable one.
 
 The built-in go log is embedded from `internal/subjects/golang/axiomlog`;
 maintainers refresh it with `ax update go -l internal/subjects/golang/axiomlog`.
 The rust log at `internal/subjects/rust/axiomlog` is generated the same way
 with `ax update rust -l internal/subjects/rust/axiomlog`; the agent reads
-RELEASES.md from rust-lang/rust and installs toolchains with rustup.
+RELEASES.md from rust-lang/rust and installs toolchains with rustup. The
+python log at `internal/subjects/python/axiomlog` comes from
+`ax update python -l internal/subjects/python/axiomlog`; the agent reads the
+What's New documents and installs exact CPython releases with uv.
 
 ## Log format
 

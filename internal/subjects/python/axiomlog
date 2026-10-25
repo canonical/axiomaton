@@ -1,0 +1,2 @@
+# Built-in axioms for the Python programming language. Append-only JSON lines.
+# Regenerate with: ax update python -l internal/subjects/python/axiomlog

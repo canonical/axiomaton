@@ -57,16 +57,19 @@ Commands:
             A built-in subject given without a clock reads the project's
             version from its own files (go: the go directive in go.mod;
             go:<module>: that module's require line in go.mod; rust: the
-            pinned toolchain or the rust-version in Cargo.toml).
+            pinned toolchain or the rust-version in Cargo.toml; python:
+            .python-version or the requires-python lower bound).
   for       Like since, with the cutoff taken from the knowledge cutoff that
             OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
   add       Append an axiom to the nearest writeable axiomlog.
   update    Run containerised agents to extend the log of a built-in subject
-            (go, rust, or go:<module> for a Go module dependency).
+            (go, python, rust, or go:<module> for a Go module dependency).
   subjects  List known subjects and where they come from.
   init      Write an axiomaton.cnf for this project listing the built-in
             subjects detected here (go and one go:<module> subject per
-            direct dependency, from go.mod; rust from Cargo.toml).
+            direct dependency, from go.mod; rust from Cargo.toml; python
+            from pyproject.toml, setup.py, setup.cfg, Pipfile or
+            requirements.txt).
   setup     Write ax.cnf interactively and test the configured models.
 
 Global flags:
@@ -545,10 +548,15 @@ func (a *app) update(ctx context.Context, args []string) error {
 	switch {
 	case *yes:
 		// Unverified either way; the confirmation agent's correction is the
-		// better bet when it judged the proposal inaccurate.
+		// better bet when it judged the proposal inaccurate. A suggestion
+		// that cannot be applied leaves the proposal as it was.
 		for _, p := range pending {
 			if p.Verdict.Suggests() {
-				p = p.Corrected()
+				if fixed, err := p.Corrected(axiom.Subject{Name: builtin.Name(), Shape: builtin.Shape()}); err == nil {
+					p = fixed
+				} else {
+					a.warnf("ignoring the suggestion for %q: %v", oneLineStatement(p.Axiom.Statement), err)
+				}
 			}
 			ax := p.Axiom
 			ax.By = "user"
@@ -648,6 +656,14 @@ func (a *app) subjects(_ context.Context, args []string) error {
 		fmt.Fprintf(a.stderr, "ax: new axioms would be appended to %s\n", target)
 	}
 	return nil
+}
+
+func oneLineStatement(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 80 {
+		return s[:77] + "..."
+	}
+	return s
 }
 
 func shorten(p string) string {
