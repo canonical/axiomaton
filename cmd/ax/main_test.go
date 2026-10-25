@@ -181,7 +181,7 @@ func TestInit(t *testing.T) {
 	repo := filepath.Join(root, "repo")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	os.MkdirAll(filepath.Join(repo, "pkg"), 0o755)
-	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n\ngo 1.26.1\n\nrequire (\n\tgolang.org/x/net v0.50.0\n\tgithub.com/google/uuid v1.6.0 // indirect\n)\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n\ngo 1.26.1\n\nrequire (\n\tgolang.org/x/net v0.50.0\n\texample.com/dep v1.2.3\n\tgithub.com/google/uuid v1.6.0 // indirect\n)\n"), 0o644)
 
 	exec := func(dir string, args ...string) (string, string, error) {
 		var out, errb strings.Builder
@@ -221,14 +221,16 @@ func TestInit(t *testing.T) {
 	if err != nil || !strings.Contains(out, "## go (version <= 1.26.1)") {
 		t.Fatalf("default since: %v\n%s", err, out)
 	}
-	if !strings.Contains(errOut, `no axioms known for subject "go:golang.org/x/net" (run ax update go:golang.org/x/net)`) {
+	// A dependency that ships no log is empty and says so; it is omitted
+	// from the report. (golang.org/x modules ship logs, so use another.)
+	if !strings.Contains(errOut, `no axioms known for subject "go:example.com/dep" (run ax update go:example.com/dep)`) {
 		t.Fatalf("empty module subject should point at update:\n%s", errOut)
 	}
-	if strings.Contains(out, "go-mod") {
+	if strings.Contains(out, "go:example.com/dep") {
 		t.Fatalf("subject with nothing to report should be omitted:\n%s", out)
 	}
 	out, _, _ = exec(filepath.Join(repo, "pkg"), "subjects")
-	if !strings.Contains(out, "go\tshape [version:goversion]") || !strings.Contains(out, "default @ 1.26.1 (detected)") || !strings.Contains(out, "go:golang.org/x/net\tshape [version:semver]\t0 axiom(s)\tdefault @ v0.50.0 (detected)") {
+	if !strings.Contains(out, "go\tshape [version:goversion]") || !strings.Contains(out, "default @ 1.26.1 (detected)") || !strings.Contains(out, "go:golang.org/x/net\tshape [version:semver]\t") || !strings.Contains(out, "default @ v0.50.0 (detected)") || !strings.Contains(out, "go:example.com/dep\tshape [version:semver]\t0 axiom(s)\tdefault @ v1.2.3 (detected)") {
 		t.Fatalf("subjects:\n%s", out)
 	}
 

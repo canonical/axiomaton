@@ -161,7 +161,7 @@ func TestRenderRoundTrip(t *testing.T) {
 	if err != nil || ep.Model != "7" || ep.BaseURL != "http://localhost:1234/v1" || ep.APIKey != "x" {
 		t.Fatalf("summary %+v %v", ep, err)
 	}
-	if back.Search.MinSimilarity != 0.4 || back.Search.Candidates != 8 || back.Update.Image != u.Update.Image || back.Update.ExecTimeout != 300 || back.Update.Confirmations != DefaultConfirmations() || DefaultConfirmations() < 1 {
+	if back.Search.MinSimilarity != 0.4 || back.Search.Candidates != 8 || back.Update.Image != u.Update.Image || back.Update.ExecTimeout != 300 || back.Update.Confirmations != DefaultConfirmations() || DefaultConfirmations() < 1 || back.Proxy.Disabled || back.Proxy.MaxObjectMB != 1024 {
 		t.Fatalf("tunables: %+v", back)
 	}
 	if _, err := back.Resolve(RoleRerank); !errors.Is(err, ErrNotConfigured) {

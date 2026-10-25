@@ -15,17 +15,24 @@
 // Package gomod is the built-in subject family for Go module dependencies.
 // Every module a project requires directly in its go.mod gets a subject
 // named go:<module path>, e.g. go:golang.org/x/net, clocked
-// by the module version in use.
+// by the module version in use. Logs for the golang.org/x modules ship
+// embedded under seeds/<module path>/axiomlog; any other module starts
+// empty and is built by ax update in the project.
 package gomod
 
 import (
+	"embed"
 	"fmt"
+	"io/fs"
+	"path"
+	"sort"
 	"strings"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 
 	"github.com/canonical/axiomaton/internal/axiom"
+	"github.com/canonical/axiomaton/internal/axiomlog"
 	"github.com/canonical/axiomaton/internal/subjects/golang"
 )
 
@@ -34,6 +41,30 @@ const Prefix = "go:"
 
 // Pattern describes the family's subject names in help text.
 const Pattern = Prefix + "<module path>"
+
+//go:embed seeds
+var seeds embed.FS
+
+// seedPath is where a module's embedded log lives, if it has one.
+func seedPath(module string) string {
+	return path.Join("seeds", module, "axiomlog")
+}
+
+// Shipped lists the modules whose logs are embedded in the binary, in
+// module path order. They are registered and loaded like the other
+// built-in subjects.
+func Shipped() []Subject {
+	var out []Subject
+	fs.WalkDir(seeds, "seeds", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "axiomlog" {
+			return nil
+		}
+		out = append(out, Subject{Module: path.Dir(strings.TrimPrefix(p, "seeds/"))})
+		return nil
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })
+	return out
+}
 
 // Subject is the built-in subject for one Go module.
 type Subject struct {
@@ -90,8 +121,15 @@ func (Subject) Shape() []axiom.ClockShape {
 	return []axiom.ClockShape{{Name: "version", Kind: axiom.KindSemver}}
 }
 
-// Seed returns nothing: module logs are built by ax update in the project.
-func (Subject) Seed() ([]axiom.Axiom, error) { return nil, nil }
+// Seed returns the module's embedded log, or nothing for a module that does
+// not ship one; those logs are built by ax update in the project.
+func (s Subject) Seed() ([]axiom.Axiom, error) {
+	data, err := seeds.ReadFile(seedPath(s.Module))
+	if err != nil {
+		return nil, nil
+	}
+	return axiomlog.Read(strings.NewReader(string(data)), "builtin:"+s.Name())
+}
 
 // Detect reads the version the project requires for this module from its
 // go.mod. Unlike the family detection it also accepts an indirect
@@ -157,6 +195,24 @@ version (date part, UTC) as the time and the version without its leading "v"
 from. Only propose axioms you have actually read in a source or verified by
 running code; never propose from memory alone.
 
+Modules without tagged releases (the proxy's @v/list is empty, or only
+pseudo-versions such as v0.0.0-20250320100000-c3c3c3c3c3c3 are in use) are
+reviewed in batches of commits that stand in for releases. Clone the
+repository (its URL is the "Origin" of "go list -m -json %[1]s@latest" or is
+shown on pkg.go.dev), list the commits in scope on the main branch together
+with the go directive at each one, for example
+  git log --reverse --format='%%H %%cI' --since=<date> | while read h t; do
+    echo "$h $t $(git show "$h:go.mod" 2>/dev/null | awk '/^go /{print $2}')"; done
+and pass them to the batch_commits tool with the newest tag before them (if
+any) as base_version. The tool is deterministic: a release opens when the go
+directive changes, after a gap of more than a month, or at a new calendar
+month, and is named by the pseudo-version of its last commit, which is also
+what a go.mod requiring that commit records. Treat each release exactly like
+a tagged one: review the changes between the previous release's last commit
+and this one's, and propose axioms with the release's version as the clock
+and its date as the time. Do not invent other version numbers for untagged
+commits.
+
 Hard limit: never propose an axiom dated on or before %[3]s, the global epoch.
 Everything older is assumed to be prior knowledge of every model, and the
 propose_axiom tool rejects it. Releases before that date are out of scope
@@ -185,8 +241,10 @@ Your task:
 1. List the module's versions from the proxy and identify every tagged
    release that is newer than the newest release the log covers and was
    published after ` + axiom.GlobalEpoch.Format("2006-01-02") + `, the global epoch. Ignore
-   pre-releases (such as -rc or -beta) and pseudo-versions unless the module
-   has no tagged releases at all, in which case say so and stop.`)
+   pre-releases (such as -rc or -beta) and pseudo-versions. If the module
+   has no tagged releases at all, instead batch its commits after that point
+   into releases with the batch_commits tool as the instructions describe,
+   and cover those.`)
 	if latest == "" {
 		b.WriteString(`
    The log is empty; if that leaves more than about twenty releases, cover
@@ -246,7 +304,10 @@ true or you could not establish what is true, leave every correction empty
 and say so in the reason. When the fault is the release or the date rather
 than the wording, keep the statement as it is and give the correct date
 (YYYY-MM-DD) and clock (the release) instead; both may be combined with a
-corrected statement.`, s.Module)
+corrected statement. If the statement bundles several distinct facts, or is
+right in one part and wrong in another, give a split instead: the separate
+axioms that should replace it, each verified, each with its own date and
+clock only where they differ from the original.`, s.Module)
 }
 
 func (s Subject) ConfirmTask(a axiom.Axiom) string {
@@ -261,7 +322,8 @@ Investigate, then call the submit_answer tool with confirmed true or false,
 a one or two sentence reason citing what you checked, and, only when the
 statement is inaccurate rather than unfounded, a correction giving the
 verified statement that should replace it and/or the correct date and clock
-when the release or date is what is wrong.`,
+when the release or date is what is wrong, or a split into several axioms
+when it bundles distinct facts.`,
 		s.Module, a.Clock["version"], a.Time.Format("2006-01-02"), a.Statement, a.Source)
 }
 

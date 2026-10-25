@@ -26,11 +26,15 @@ func TestSeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One seed per enumerable built-in, in name order, each holding only
-	// its own subject's axioms. Seeds other than go may be empty until
-	// generated with ax update.
-	names := staticNames()
-	if len(seeds) != len(names) || strings.Join(names, ",") != "go,python,rust,zig" || len(seeds[0]) < 20 {
+	// One seed per enumerable built-in: the fixed subjects in name order,
+	// then the shipped golang.org/x modules, each holding only its own
+	// subject's axioms. Seeds other than go may be empty until generated
+	// with ax update.
+	var names []string
+	for _, b := range Builtins() {
+		names = append(names, b.Name())
+	}
+	if len(seeds) != len(names) || !strings.HasPrefix(strings.Join(names, ","), "go,python,rust,zig,go:golang.org/x/crypto,") || !strings.Contains(strings.Join(names, ","), ",go:golang.org/x/net,") || len(seeds[0]) < 20 {
 		t.Fatalf("unexpected seeds: %d for %v", len(seeds), names)
 	}
 	for i, seed := range seeds {
@@ -39,6 +43,9 @@ func TestSeeds(t *testing.T) {
 				t.Fatalf("bad %s seed axiom %+v", names[i], a)
 			}
 		}
+	}
+	if shape, ok := Shapes()["go:golang.org/x/net"]; !ok || shape[0].Kind != "semver" {
+		t.Fatal("shipped module should be registered up front")
 	}
 	b, ok := Lookup("go")
 	if !ok || b.Shape()[0].Name != "version" {
@@ -64,8 +71,8 @@ func TestFamilies(t *testing.T) {
 	if _, ok := Lookup("go:<module path>"); ok {
 		t.Fatal("the pattern itself is not a subject")
 	}
-	if _, ok := Shapes()["go:golang.org/x/net"]; ok {
-		t.Fatal("family members are not enumerable")
+	if _, ok := Shapes()["go:example.com/unshipped"]; ok {
+		t.Fatal("unshipped family members are not enumerable")
 	}
 }
 

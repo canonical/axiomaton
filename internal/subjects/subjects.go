@@ -56,8 +56,9 @@ type Detected struct {
 }
 
 // Family is an open-ended set of built-in subjects sharing a name prefix,
-// such as one subject per Go module dependency. Its members cannot be
-// enumerated, so they have no seeds and are only registered when named or
+// such as one subject per Go module dependency. Its members cannot all be
+// enumerated: those that ship an embedded log are registered and loaded
+// like other built-ins, the rest are registered only when named or
 // detected.
 type Family interface {
 	// Prefix starts every member's name.
@@ -68,6 +69,21 @@ type Family interface {
 	Lookup(name string) (Builtin, bool)
 	// Detect lists the members the project at dir uses.
 	Detect(dir string) []Detected
+	// Shipped lists the members whose logs are embedded in the binary.
+	Shipped() []Builtin
+}
+
+// Builtins lists every built-in subject that is enumerable: the fixed
+// subjects in name order followed by each family's shipped members.
+func Builtins() []Builtin {
+	var out []Builtin
+	for _, n := range staticNames() {
+		out = append(out, all[n])
+	}
+	for _, f := range families {
+		out = append(out, f.Shipped()...)
+	}
+	return out
 }
 
 // Detect runs every built-in subject's and family's detection against dir.
@@ -115,6 +131,14 @@ func (gomodFamily) Detect(dir string) []Detected {
 	return out
 }
 
+func (gomodFamily) Shipped() []Builtin {
+	var out []Builtin
+	for _, s := range gomod.Shipped() {
+		out = append(out, s)
+	}
+	return out
+}
+
 // Lookup returns a built-in subject by name, including family members such
 // as go:golang.org/x/net.
 func Lookup(name string) (Builtin, bool) {
@@ -148,21 +172,23 @@ func staticNames() []string {
 	return names
 }
 
-// Shapes returns the clock shape of every enumerable built-in subject.
-// Family members are not included; use Lookup for those.
+// Shapes returns the clock shape of every enumerable built-in subject,
+// including shipped family members. Other family members are registered
+// on demand; use Lookup for those.
 func Shapes() map[string][]axiom.ClockShape {
 	out := map[string][]axiom.ClockShape{}
-	for n, b := range all {
-		out[n] = b.Shape()
+	for _, b := range Builtins() {
+		out[b.Name()] = b.Shape()
 	}
 	return out
 }
 
-// Seeds returns the embedded logs of every built-in subject.
+// Seeds returns the embedded logs of every enumerable built-in subject, in
+// Builtins order.
 func Seeds() ([][]axiom.Axiom, error) {
 	var out [][]axiom.Axiom
-	for _, n := range staticNames() {
-		seed, err := all[n].Seed()
+	for _, b := range Builtins() {
+		seed, err := b.Seed()
 		if err != nil {
 			return nil, err
 		}

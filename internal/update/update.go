@@ -30,6 +30,7 @@ import (
 
 	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/subjects"
+	"github.com/canonical/axiomaton/internal/subjects/gomod"
 )
 
 // Verdict is the structured answer of a confirmation agent. A refusal comes
@@ -44,19 +45,35 @@ type Verdict struct {
 	// Date is the agent's corrected release date.
 	Date string `json:"date,omitempty" jsonschema:"Only when confirmed is false because the statement became true on a different date than stated: the correct date as YYYY-MM-DD (the release date), verified in a source. Leave empty when the stated date is right."`
 	// Clock is the agent's corrected clock, e.g. the release version.
-	Clock  []string `json:"clock,omitempty" jsonschema:"Only when confirmed is false because the statement belongs to a different release than stated: the correct clock values in order (for example the release version such as 1.27.0), verified in a source. Leave empty when the stated release is right."`
-	Reason string   `json:"reason" jsonschema:"One or two sentences explaining what was checked and the outcome, and for a correction what was wrong with the original."`
+	Clock []string `json:"clock,omitempty" jsonschema:"Only when confirmed is false because the statement belongs to a different release than stated: the correct clock values in order (for example the release version such as 1.27.0), verified in a source. Leave empty when the stated release is right."`
+	// Split replaces the statement with several axioms.
+	Split  []Part `json:"split,omitempty" jsonschema:"Only when confirmed is false because the statement bundles several distinct facts, or is right in part and wrong in part: the separate axioms that should replace it, each verified. Each part has its own statement and, only where it differs from the original, its own date and clock. Leave empty otherwise; do not combine with correction."`
+	Reason string `json:"reason" jsonschema:"One or two sentences explaining what was checked and the outcome, and for a correction or split what was wrong with the original."`
+}
+
+// Part is one axiom of a split verdict.
+type Part struct {
+	Statement string   `json:"statement" jsonschema:"One self-contained declarative sentence or two, verified against a primary source."`
+	Date      string   `json:"date,omitempty" jsonschema:"The date this part became true as YYYY-MM-DD, only if it differs from the original's."`
+	Clock     []string `json:"clock,omitempty" jsonschema:"The clock values for this part in order (e.g. the release version), only if they differ from the original's."`
 }
 
 // Suggests reports whether the verdict rejects the axiom but offers a
-// corrected statement, date or clock.
+// corrected statement, date or clock, or a split into several axioms.
 func (v Verdict) Suggests() bool {
-	return !v.Confirmed && (strings.TrimSpace(v.Correction) != "" || strings.TrimSpace(v.Date) != "" || len(v.Clock) > 0)
+	return !v.Confirmed && (strings.TrimSpace(v.Correction) != "" || strings.TrimSpace(v.Date) != "" || len(v.Clock) > 0 || len(v.Split) > 0)
 }
 
 // Suggestion describes what the verdict proposes to change, for logs and
 // the reviewer.
 func (v Verdict) Suggestion() string {
+	if len(v.Split) > 0 {
+		parts := make([]string, len(v.Split))
+		for i, part := range v.Split {
+			parts[i] = fmt.Sprintf("%d. %s", i+1, part.describe())
+		}
+		return fmt.Sprintf("split into %d: %s", len(v.Split), strings.Join(parts, " "))
+	}
 	var parts []string
 	if s := strings.TrimSpace(v.Correction); s != "" {
 		parts = append(parts, "statement: "+s)
@@ -70,12 +87,27 @@ func (v Verdict) Suggestion() string {
 	return strings.Join(parts, "; ")
 }
 
+func (p Part) describe() string {
+	s := strings.TrimSpace(p.Statement)
+	var extra []string
+	if d := strings.TrimSpace(p.Date); d != "" {
+		extra = append(extra, d)
+	}
+	if len(p.Clock) > 0 {
+		extra = append(extra, strings.Join(p.Clock, " "))
+	}
+	if len(extra) > 0 {
+		s += " [" + strings.Join(extra, " ") + "]"
+	}
+	return s
+}
+
 // Proposal is an axiom proposed by the update agent plus its verdict.
 type Proposal struct {
 	Axiom   axiom.Axiom `json:"axiom"`
 	Verdict Verdict     `json:"verdict"`
-	// Original is the statement as the update agent proposed it when Axiom
-	// carries a correction that was confirmed instead.
+	// Original is the axiom as the update agent proposed it when Axiom is a
+	// correction of it or one part of a split.
 	Original *axiom.Axiom `json:"original,omitempty"`
 	// Error records a confirmation failure (the agent could not run).
 	Error string `json:"error,omitempty"`
@@ -87,14 +119,68 @@ var ErrPriorKnowledge = errors.New("the corrected date is not after the global e
 
 // Corrected returns the proposal with the verdict's corrections applied to
 // the statement, date and clock, keeping the original for the record. The
-// clock is validated against the subject's shape.
+// clock is validated against the subject's shape. For a split verdict use
+// Suggested.
 func (p Proposal) Corrected(subject axiom.Subject) (Proposal, error) {
+	if len(p.Verdict.Split) > 0 {
+		return p, errors.New("the suggestion is a split; use Suggested")
+	}
+	fixed, err := p.derive(subject, p.Verdict.Correction, p.Verdict.Date, p.Verdict.Clock)
+	if err != nil {
+		return p, err
+	}
+	if fixed.Axiom.ID == p.Axiom.ID {
+		return p, errors.New("the suggestion changes nothing")
+	}
+	return fixed, nil
+}
+
+// Suggested returns the proposals the verdict's suggestion stands for: the
+// single corrected proposal, or one per part of a split. Parts dated on or
+// before the global epoch are left out; when nothing remains the error is
+// ErrPriorKnowledge.
+func (p Proposal) Suggested(subject axiom.Subject) ([]Proposal, error) {
+	if len(p.Verdict.Split) == 0 {
+		fixed, err := p.Corrected(subject)
+		if err != nil {
+			return nil, err
+		}
+		return []Proposal{fixed}, nil
+	}
+	var out []Proposal
+	seen := map[string]bool{p.Axiom.ID: true}
+	for i, part := range p.Verdict.Split {
+		if strings.TrimSpace(part.Statement) == "" {
+			return nil, fmt.Errorf("part %d of the split has no statement", i+1)
+		}
+		q, err := p.derive(subject, part.Statement, part.Date, part.Clock)
+		if errors.Is(err, ErrPriorKnowledge) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("part %d of the split: %w", i+1, err)
+		}
+		if seen[q.Axiom.ID] {
+			return nil, fmt.Errorf("part %d of the split repeats another part or the original", i+1)
+		}
+		seen[q.Axiom.ID] = true
+		out = append(out, q)
+	}
+	if len(out) == 0 {
+		return nil, ErrPriorKnowledge
+	}
+	return out, nil
+}
+
+// derive builds a replacement for the proposal from an optional statement,
+// date and clock, keeping whatever is not given and recording the original.
+func (p Proposal) derive(subject axiom.Subject, statement, date string, clock []string) (Proposal, error) {
 	orig := p.Axiom
 	fixed := orig
-	if st := strings.TrimSpace(p.Verdict.Correction); st != "" {
+	if st := strings.TrimSpace(statement); st != "" {
 		fixed.Statement = st
 	}
-	if d := strings.TrimSpace(p.Verdict.Date); d != "" {
+	if d := strings.TrimSpace(date); d != "" {
 		t, err := time.Parse("2006-01-02", d)
 		if err != nil {
 			return p, fmt.Errorf("suggested date %q: use YYYY-MM-DD", d)
@@ -104,17 +190,14 @@ func (p Proposal) Corrected(subject axiom.Subject) (Proposal, error) {
 		}
 		fixed.Time = t.UTC()
 	}
-	if len(p.Verdict.Clock) > 0 {
-		clock, err := subject.Clock(p.Verdict.Clock)
+	if len(clock) > 0 {
+		c, err := subject.Clock(clock)
 		if err != nil {
 			return p, fmt.Errorf("suggested clock: %w", err)
 		}
-		fixed.Clock = clock
+		fixed.Clock = c
 	}
 	fixed.Normalise()
-	if fixed.ID == orig.ID {
-		return p, errors.New("the suggestion changes nothing")
-	}
 	return Proposal{Axiom: fixed, Original: &orig}, nil
 }
 
@@ -159,8 +242,16 @@ func (u *Updater) Propose(ctx context.Context, existing []axiom.Axiom) ([]axiom.
 	if err != nil {
 		return nil, "", err
 	}
+	tools := []tool.Tool{shell, propose}
+	if _, ok := u.Subject.(gomod.Subject); ok {
+		batch, err := BatchTool(u.Log)
+		if err != nil {
+			return nil, "", err
+		}
+		tools = append(tools, batch)
+	}
 	u.logf("running update agent for %s", u.Subject.Name())
-	summary, err := u.Agent.Run(ctx, u.Subject.UpdateInstructions(), u.Subject.UpdateTask(existing), []tool.Tool{shell, propose}, nil)
+	summary, err := u.Agent.Run(ctx, u.Subject.UpdateInstructions(), u.Subject.UpdateTask(existing), tools, nil)
 	if err != nil {
 		return props.List(), "", fmt.Errorf("update agent: %w", err)
 	}
@@ -189,7 +280,15 @@ func (u *Updater) Confirm(ctx context.Context, a axiom.Axiom) (Verdict, error) {
 	v.Correction = strings.TrimSpace(v.Correction)
 	v.Date = strings.TrimSpace(v.Date)
 	if v.Confirmed {
+		v.Correction, v.Date, v.Clock, v.Split = "", "", nil, nil
+	}
+	// A split takes precedence over a single correction; a split with one
+	// part is just a correction.
+	if len(v.Split) > 0 {
 		v.Correction, v.Date, v.Clock = "", "", nil
+		if len(v.Split) == 1 {
+			v.Correction, v.Date, v.Clock, v.Split = strings.TrimSpace(v.Split[0].Statement), strings.TrimSpace(v.Split[0].Date), v.Split[0].Clock, nil
+		}
 	}
 	// Suggestions that repeat the proposal are not corrections.
 	if v.Correction == a.Statement {
@@ -230,8 +329,7 @@ func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, 
 	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results := make([]Proposal, len(proposed))
-	dropped := make([]bool, len(proposed))
+	results := make([][]Proposal, len(proposed))
 	var (
 		wg       sync.WaitGroup
 		sem      = make(chan struct{}, workers)
@@ -245,7 +343,7 @@ func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, 
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			p, keep, err := u.confirmOne(ctx, i, len(proposed), a, known)
+			ps, err := u.confirmOne(ctx, i, len(proposed), a, known)
 			if err != nil {
 				errMu.Lock()
 				if firstErr == nil {
@@ -255,8 +353,7 @@ func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, 
 				cancel()
 				return
 			}
-			results[i] = p
-			dropped[i] = !keep
+			results[i] = ps
 		})
 	}
 	wg.Wait()
@@ -267,69 +364,91 @@ func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, 
 		return nil, summary, err
 	}
 	out := make([]Proposal, 0, len(proposed))
-	for i := range results {
-		if !dropped[i] {
-			out = append(out, results[i])
-		}
+	for _, ps := range results {
+		out = append(out, ps...)
 	}
 	return out, summary, nil
 }
 
-// confirmOne runs the confirmation (and, for an inaccurate statement, the
-// confirmation of its correction) for proposal i of n. keep is false when
-// the proposal should be dropped because its correction is already known.
-// A non-nil error means the run was cancelled.
-func (u *Updater) confirmOne(ctx context.Context, i, n int, a axiom.Axiom, known *idSet) (p Proposal, keep bool, err error) {
+// confirmOne runs the confirmation for proposal i of n and, when the agent
+// suggests a correction or a split, the confirmation of each replacement.
+// It returns the proposals that result: usually one, several for a split,
+// none when the proposal turns out to be prior knowledge or already in the
+// log. A non-nil error means the run was cancelled.
+func (u *Updater) confirmOne(ctx context.Context, i, n int, a axiom.Axiom, known *idSet) ([]Proposal, error) {
 	tag := fmt.Sprintf("[%d/%d]", i+1, n)
 	u.logf("%s confirming: %s", tag, oneLine(a.Statement, 100))
-	p = Proposal{Axiom: a}
+	p := Proposal{Axiom: a}
 	v, err := u.Confirm(ctx, a)
 	if err != nil {
 		if ctx.Err() != nil {
-			return p, false, err
+			return nil, err
 		}
 		p.Error = err.Error()
 		u.logf("%s confirmation failed: %v", tag, err)
-		return p, true, nil
+		return []Proposal{p}, nil
 	}
 	p.Verdict = v
 	switch {
 	case v.Confirmed:
 		u.logf("%s confirmed: %s", tag, oneLine(v.Reason, 160))
-	case v.Suggests():
-		u.logf("%s inaccurate: %s", tag, oneLine(v.Reason, 160))
-		u.logf("%s suggested instead: %s", tag, oneLine(v.Suggestion(), 200))
-		fixed, err := p.Corrected(u.subject())
-		if errors.Is(err, ErrPriorKnowledge) {
-			u.logf("%s %v; dropping the proposal", tag, err)
-			return p, false, nil
+		return []Proposal{p}, nil
+	case !v.Suggests():
+		u.logf("%s unfounded: %s", tag, oneLine(v.Reason, 160))
+		return []Proposal{p}, nil
+	}
+	u.logf("%s inaccurate: %s", tag, oneLine(v.Reason, 160))
+	u.logf("%s suggested instead: %s", tag, oneLine(v.Suggestion(), 300))
+	replacements, err := p.Suggested(u.subject())
+	if errors.Is(err, ErrPriorKnowledge) {
+		u.logf("%s %v; dropping the proposal", tag, err)
+		return nil, nil
+	}
+	if err != nil {
+		u.logf("%s the suggestion cannot be applied (%v); leaving the proposal for review", tag, err)
+		return []Proposal{p}, nil
+	}
+	split := len(v.Split) > 0
+	var out []Proposal
+	for j, r := range replacements {
+		what := "correction"
+		if split {
+			what = fmt.Sprintf("part %d/%d", j+1, len(replacements))
 		}
-		if err != nil {
-			u.logf("%s the suggestion cannot be applied (%v); leaving the proposal for review", tag, err)
-			return p, true, nil
+		if known.has(r.Axiom.ID) {
+			u.logf("%s the %s is already in the log; dropping it", tag, what)
+			continue
 		}
-		if known.has(fixed.Axiom.ID) {
-			u.logf("%s the correction is already in the log; dropping the proposal", tag)
-			return p, false, nil
-		}
-		v2, err := u.Confirm(ctx, fixed.Axiom)
+		v2, err := u.Confirm(ctx, r.Axiom)
 		switch {
 		case err != nil && ctx.Err() != nil:
-			return p, false, err
+			return nil, err
 		case err != nil:
-			u.logf("%s confirmation of the correction failed: %v", tag, err)
+			u.logf("%s confirmation of the %s failed: %v", tag, what, err)
+			if split {
+				r.Error = err.Error()
+				out = append(out, r)
+			} else {
+				out = append(out, p)
+			}
 		case v2.Confirmed:
-			u.logf("%s correction confirmed: %s", tag, oneLine(v2.Reason, 160))
-			fixed.Verdict = v2
-			p = fixed
-			known.add(p.Axiom.ID)
+			u.logf("%s %s confirmed: %s", tag, what, oneLine(v2.Reason, 160))
+			r.Verdict = v2
+			known.add(r.Axiom.ID)
+			out = append(out, r)
 		default:
-			u.logf("%s correction not confirmed: %s", tag, oneLine(v2.Reason, 160))
+			u.logf("%s %s not confirmed: %s", tag, what, oneLine(v2.Reason, 160))
+			if split {
+				// The part stands on its own for review, with the
+				// original attached and the part's own verdict.
+				r.Verdict = v2
+				out = append(out, r)
+			} else {
+				out = append(out, p)
+			}
 		}
-	default:
-		u.logf("%s unfounded: %s", tag, oneLine(v.Reason, 160))
 	}
-	return p, true, nil
+	return out, nil
 }
 
 // idSet is a concurrency safe set of axiom IDs.
@@ -385,6 +504,12 @@ func Review(pending []Proposal, in io.Reader, out io.Writer, shape []axiom.Clock
 			if len(p.Verdict.Clock) > 0 {
 				fmt.Fprintf(out, "  suggested clock: %s\n", strings.Join(p.Verdict.Clock, " "))
 			}
+			if len(p.Verdict.Split) > 0 {
+				fmt.Fprintf(out, "  suggested split into %d:\n", len(p.Verdict.Split))
+				for i, part := range p.Verdict.Split {
+					fmt.Fprintf(out, "    %d. %s\n", i+1, part.describe())
+				}
+			}
 			prompt = "Accept? [y/n/c=suggestion/e/q] "
 		default:
 			fmt.Fprintf(out, "  not confirmed: %s\n", p.Verdict.Reason)
@@ -404,14 +529,16 @@ func Review(pending []Proposal, in io.Reader, out io.Writer, shape []axiom.Clock
 				if !p.Verdict.Suggests() {
 					continue
 				}
-				fixed, err := p.Corrected(subject)
+				replacements, err := p.Suggested(subject)
 				if err != nil {
 					fmt.Fprintf(out, "  cannot apply the suggestion: %v\n", err)
 					continue
 				}
-				a := fixed.Axiom
-				a.By = "user"
-				accepted = append(accepted, a)
+				for _, r := range replacements {
+					a := r.Axiom
+					a.By = "user"
+					accepted = append(accepted, a)
+				}
 			case "n", "no":
 			case "e", "edit":
 				fmt.Fprint(out, "New statement: ")

@@ -172,7 +172,10 @@ true or you could not establish what is true, leave every correction empty
 and say so in the reason. When the fault is the release or the date rather
 than the wording, keep the statement as it is and give the correct date
 (YYYY-MM-DD) and clock (the release) instead; both may be combined with a
-corrected statement.`
+corrected statement. If the statement bundles several distinct facts, or is
+right in one part and wrong in another, give a split instead: the separate
+axioms that should replace it, each verified, each with its own date and
+clock only where they differ from the original.`
 }
 
 func (Subject) ConfirmTask(a axiom.Axiom) string {
@@ -186,7 +189,8 @@ Investigate, then call the submit_answer tool with confirmed true or false,
 a one or two sentence reason citing what you checked, and, only when the
 statement is inaccurate rather than unfounded, a correction giving the
 verified statement that should replace it and/or the correct date and clock
-when the release or date is what is wrong.`,
+when the release or date is what is wrong, or a split into several axioms
+when it bundles distinct facts.`,
 		a.Clock["version"], a.Time.Format("2006-01-02"), a.Statement, a.Source)
 }
 

@@ -89,9 +89,11 @@ dependencies you do not want reported on can simply be deleted from the file.
 
 `go:<module>` subjects are a built-in *family*: any valid module path
 after the prefix is a subject with a `version` clock of kind `semver`, with no
-declaration needed. They ship with no axioms; `ax update
-go:golang.org/x/net` builds the log for the project (see below), and
-until then `ax since` warns that nothing is known for the subject.
+declaration needed. The `golang.org/x` modules (crypto, exp, image, mod, net,
+oauth2, sync, sys, term, text, time and tools) ship with embedded logs like
+the language subjects do; any other module starts empty, `ax update
+go:<module>` builds its log in the project (see below), and until then
+`ax since` warns that nothing is known for the subject.
 
 `axiomaton.cnf` files are written in YAML. Each subject is either the compact
 `[name, clock values...]` form or a mapping. Subjects that are not built in need
@@ -167,6 +169,9 @@ update:
   max_iterations: 80                # tool calls per agent run
   exec_timeout: 300                 # seconds per command in the container
   confirmations: 4                  # confirmation agents at once (default: half the CPUs)
+proxy:
+  disabled: false                   # containers have no network except the caching proxy
+  max_object_mb: 1024
 ```
 
 Requests that fail with 429, 5xx or a dropped connection are retried with
@@ -202,7 +207,16 @@ list and dates from the module proxy and works out what changed for callers
 from the module's release notes, an API comparison between tags (apidiff) and
 the commit log, starting from the newest release the log already covers, or,
 for an empty log, from releases published since the global epoch
-(2023-08-01). Then after the agent has concluded, for each individual
+(2023-08-01). A module that has never been tagged, such as
+`golang.org/x/exp`, is reviewed in batches of commits that stand in for
+releases: the agent lists the commits in scope with the `go` directive at
+each one and hands them to a `batch_commits` tool, which deterministically
+opens a new release when the `go` directive changes, after a gap of more
+than a month between commits, or at a new calendar month (so at most one
+release per month otherwise), and names each release by the pseudo-version
+of its last commit (`v0.0.0-20250320100000-c3c3c3c3c3c3`). That is the same
+form a `go.mod` records for the commit, so a project's requirement and the
+axioms' clocks compare directly. Then after the agent has concluded, for each individual
 axiom added, a new agent, with a new container, is asked to confirm, it; these
 confirmations run several at a time (`update.confirmations` in `ax.cnf`, half
 the CPUs by default, or `-j n` on the command line), each in its own
@@ -212,17 +226,21 @@ user input. A confirmation agent that rejects a statement says which kind of
 rejection it is: an *inaccurate* axiom (wrong release or date, wrong
 identifier or scope, overstated or incomplete) comes back with a correction
 the agent did verify, which may be a corrected statement, a corrected date,
-a corrected clock (release) or any combination, while an *unfounded* one
-comes back with no suggestion. A correction is validated (the clock against
-the subject's shape; a date on or before the global epoch drops the proposal
-as prior knowledge), confirmed once more by a fresh agent and, if that
-succeeds, appended in place of the proposal (the original is kept in the
-pending record). On a terminal the user is asked about each remaining
-proposal, with `c` accepting the suggested correction where there is one;
-otherwise they are written to `<axiomlog>.pending` (suggestions under
-`verdict.correction`, `verdict.date` and `verdict.clock`) for later review,
-or accepted with `-y`, which takes the suggestion over the original when the
-agent offered a usable one.
+a corrected clock (release) or any combination, or, when the statement
+bundles several facts or is right only in part, a *split* into separate
+axioms each with its own statement and, where different, date and clock,
+while an *unfounded* one comes back with no suggestion. A correction is
+validated (the clock against the subject's shape; a date on or before the
+global epoch drops the proposal, or that part of a split, as prior
+knowledge), and each replacement is confirmed once more by a fresh agent:
+one that succeeds is appended in place of the proposal, one that fails waits
+for review on its own, and the original is kept alongside in the pending
+record either way. On a terminal the user is asked about each remaining
+proposal, with `c` accepting the suggested correction, or every part of a
+split, where there is one; otherwise they are written to `<axiomlog>.pending`
+(suggestions under `verdict.correction`, `verdict.date`, `verdict.clock` and
+`verdict.split`) for later review, or accepted with `-y`, which takes the
+suggestion over the original when the agent offered a usable one.
 
 The built-in go log is embedded from `internal/subjects/golang/axiomlog`;
 maintainers refresh it with `ax update go -l internal/subjects/golang/axiomlog`.
@@ -234,7 +252,67 @@ python log at `internal/subjects/python/axiomlog` comes from
 What's New documents and installs exact CPython releases with uv. The zig
 log at `internal/subjects/zig/axiomlog` comes from
 `ax update zig -l internal/subjects/zig/axiomlog`; the agent reads each
-version's release notes and the download index on ziglang.org.
+version's release notes and the download index on ziglang.org. The shipped
+module logs live under `internal/subjects/gomod/seeds/<module path>/axiomlog`,
+e.g. `ax update go:golang.org/x/net -l internal/subjects/gomod/seeds/golang.org/x/net/axiomlog`;
+adding a directory with an `axiomlog` there ships another module.
+
+### Cache proxy and network isolation
+
+Agent containers are created with no network of their own (`--network
+none`). Their only way out is a caching forward proxy that `ax` runs on the
+host for the length of the command: for each container `ax` runs a small
+forwarder of its own binary inside the container's network namespace (via
+`nsenter`, under `podman unshare` when rootless) that relays
+`127.0.0.1:3128` in the container to the proxy's unix socket on the host.
+The proxy speaks only HTTP: plain requests are relayed by URL, and `CONNECT`
+is accepted for port 443 alone and even then terminated by the proxy, which
+presents a certificate from its own authority and talks HTTPS to the origin
+itself. Nothing else can leave the container, so SSH, raw TCP and any other
+protocol are blocked by construction rather than by a firewall rule the
+agent could undo. A container that cannot be attached to the proxy is not
+started. Setting `proxy.disabled: true` gives containers podman's default
+network, with no caching and no restriction.
+
+The CA is generated on first use and kept at
+`$XDG_DATA_HOME/axiomaton/proxy/ca.crt` (key readable by the owner only).
+The certificate is installed in each container at `/etc/axiomaton/ca.crt`
+and under `/usr/local/share/ca-certificates`, so `apt-get install
+ca-certificates` adds it to the system store, and every command runs with
+`HTTP_PROXY`/`HTTPS_PROXY`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`,
+`GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `CARGO_HTTP_CAINFO` and
+`NODE_EXTRA_CA_CERTS` set; apt gets a matching `apt.conf.d` snippet. The
+proxy URL carries a random per-process token as well.
+
+Responses to plain `GET`s are stored under `$XDG_CACHE_HOME/axiomaton/proxy`.
+Immutable artefacts (`.deb`, module `.zip`/`.info`/`.mod`, wheels, tarballs,
+apt pools, PyPI package files, dated Rust dists and so on) are served from
+the cache for a month; indexes and metadata (`InRelease`, `@v/list`, PyPI
+simple pages) for a few minutes, after which they are revalidated with
+`If-None-Match`/`If-Modified-Since` and served stale if the origin is
+unreachable. `Cache-Control: max-age` extends either, `no-store` and
+`private` are honoured, and non-`GET`, `Range` and oversized responses pass
+straight through.
+
+Git over HTTPS is cached as repositories rather than responses, since smart
+HTTP fetches are `POST`s whose answers depend on what the client has. The
+first fetch of a repository through the proxy makes a bare mirror under
+`$XDG_CACHE_HOME/axiomaton/proxy/git`, later fetches are answered from the
+mirror by `git http-backend`, and the mirror is refreshed from the origin
+when it is more than a few minutes old (or served as is if the origin is
+unreachable). Requests that carry credentials, and pushes, pass through to
+the origin untouched; this needs `git` on the host.
+
+Several `ax` commands can run at once: each runs its own proxy over the
+same cache, CA and mirror directories, and they coordinate with file locks
+so a file is downloaded once however many containers ask for it, a mirror
+is refreshed by one process at a time, and only one process creates the CA
+while the others load it. Cache entries are written atomically, so a
+process never sees another's half-written file.
+
+Each response carries an `X-Axiomaton-Cache` header (`HIT`, `MISS`,
+`REVALIDATED`, `STALE`, `BYPASS`, or `GIT-...` for mirrored git), and `-v`
+logs each request, including refused `CONNECT`s.
 
 ## Log format
 

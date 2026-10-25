@@ -104,6 +104,14 @@ func Render(u User, now time.Time) []byte {
 	fmt.Fprintf(&b, "  max_iterations: %d  # tool calls per agent run\n", u.Update.MaxIterations)
 	fmt.Fprintf(&b, "  exec_timeout: %d  # seconds per command in the container\n", u.Update.ExecTimeout)
 	fmt.Fprintf(&b, "  confirmations: %d  # confirmation agents run at once (default: half the CPUs)\n", u.Update.Confirmations)
+	b.WriteString("proxy:\n")
+	b.WriteString("  # Containers have no network of their own; everything goes through a\n")
+	b.WriteString("  # caching proxy on this host that intercepts HTTPS with its own CA\n")
+	b.WriteString("  # (installed in each container) and allows only HTTP and HTTPS out, so\n")
+	b.WriteString("  # apt, Go modules, PyPI, git and toolchain tarballs are fetched once and\n")
+	b.WriteString("  # SSH cannot leave. Disabling it gives containers podman's default network.\n")
+	fmt.Fprintf(&b, "  disabled: %v\n", u.Proxy.Disabled)
+	fmt.Fprintf(&b, "  max_object_mb: %d\n", u.Proxy.MaxObjectMB)
 	return b.Bytes()
 }
 

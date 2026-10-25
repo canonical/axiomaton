@@ -34,6 +34,7 @@ import (
 	"github.com/canonical/axiomaton/internal/config"
 	"github.com/canonical/axiomaton/internal/models"
 	"github.com/canonical/axiomaton/internal/models/openrouter"
+	"github.com/canonical/axiomaton/internal/proxy"
 	"github.com/canonical/axiomaton/internal/query"
 	"github.com/canonical/axiomaton/internal/subjects"
 	"github.com/canonical/axiomaton/internal/update"
@@ -86,6 +87,8 @@ type app struct {
 
 	stderr io.Writer
 	stdout io.Writer
+
+	proxy *proxy.Server
 }
 
 func main() {
@@ -100,7 +103,13 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	// The in-container network forwarder is this same binary, run by
+	// podman inside a container's network namespace.
+	if len(args) == 3 && args[0] == update.ForwardCommand {
+		return proxy.Forward(ctx, args[2], args[1], os.Stdin)
+	}
 	a := &app{stdout: stdout, stderr: stderr}
+	defer a.shutdown()
 	fs := flag.NewFlagSet("ax", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&a.configPath, "c", config.UserConfigPath(), "path to ax.cnf")
@@ -553,16 +562,19 @@ func (a *app) update(ctx context.Context, args []string) error {
 		// better bet when it judged the proposal inaccurate. A suggestion
 		// that cannot be applied leaves the proposal as it was.
 		for _, p := range pending {
+			take := []update.Proposal{p}
 			if p.Verdict.Suggests() {
-				if fixed, err := p.Corrected(axiom.Subject{Name: builtin.Name(), Shape: builtin.Shape()}); err == nil {
-					p = fixed
+				if rs, err := p.Suggested(axiom.Subject{Name: builtin.Name(), Shape: builtin.Shape()}); err == nil {
+					take = rs
 				} else {
 					a.warnf("ignoring the suggestion for %q: %v", oneLineStatement(p.Axiom.Statement), err)
 				}
 			}
-			ax := p.Axiom
-			ax.By = "user"
-			accepted = append(accepted, ax)
+			for _, r := range take {
+				ax := r.Axiom
+				ax.By = "user"
+				accepted = append(accepted, ax)
+			}
 		}
 	case isTerminal(os.Stdin):
 		accepted, err = update.Review(pending, os.Stdin, a.stderr, builtin.Shape())
@@ -596,8 +608,42 @@ func (a *app) agentParts(cfg config.User, ep config.Endpoint, image string) (upd
 	if a.verbose {
 		logger = slog.New(slog.NewTextHandler(a.stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	}
-	return update.Podman{Image: image, Log: a.logf},
-		update.FrameworkAgent{Endpoint: ep, MaxIterations: cfg.Update.MaxIterations, MaxRetries: cfg.Retry.MaxAttempts - 1, Logger: logger}
+	rt := update.Podman{Image: image, Log: a.logf}
+	if !cfg.Proxy.Disabled {
+		if srv, err := a.cacheProxy(cfg); err != nil {
+			a.warnf("cache proxy unavailable; containers download directly: %v", err)
+		} else {
+			rt.Proxy = srv
+		}
+	}
+	return rt, update.FrameworkAgent{Endpoint: ep, MaxIterations: cfg.Update.MaxIterations, MaxRetries: cfg.Retry.MaxAttempts - 1, Logger: logger}
+}
+
+// shutdown releases what a command left running: the cache proxy and its
+// socket.
+func (a *app) shutdown() {
+	if a.proxy != nil {
+		a.proxy.Close()
+	}
+}
+
+// cacheProxy builds (once per process) the caching proxy containers use.
+// It is started lazily by the first container.
+func (a *app) cacheProxy(cfg config.User) (*proxy.Server, error) {
+	if a.proxy != nil {
+		return a.proxy, nil
+	}
+	ca, err := proxy.LoadOrCreateCA(filepath.Join(config.DataDir(), "proxy"))
+	if err != nil {
+		return nil, err
+	}
+	a.proxy = &proxy.Server{
+		CA:    ca,
+		Cache: &proxy.Cache{Dir: filepath.Join(config.CacheDir(), "proxy"), MaxObject: int64(cfg.Proxy.MaxObjectMB) << 20},
+		Token: proxy.NewToken(),
+		Log:   a.logf,
+	}
+	return a.proxy, nil
 }
 
 func (a *app) subjects(_ context.Context, args []string) error {

@@ -17,6 +17,8 @@ package gomod
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -57,8 +59,39 @@ func TestLookup(t *testing.T) {
 	if s.Shape()[0].Kind != axiom.KindSemver || s.Shape()[0].Name != "version" {
 		t.Fatalf("shape: %+v", s.Shape())
 	}
-	if seed, err := s.Seed(); err != nil || seed != nil {
+	if seed, err := s.Seed(); err != nil {
 		t.Fatalf("seed: %v %v", seed, err)
+	}
+	if seed, err := (Subject{Module: "example.com/nothing"}).Seed(); err != nil || seed != nil {
+		t.Fatalf("unshipped module must have no seed: %v %v", seed, err)
+	}
+}
+
+func TestShipped(t *testing.T) {
+	shipped := Shipped()
+	var names []string
+	for _, s := range shipped {
+		names = append(names, s.Module)
+		if !strings.HasPrefix(s.Module, "golang.org/x/") {
+			t.Fatalf("unexpected shipped module %s", s.Module)
+		}
+		seed, err := s.Seed()
+		if err != nil {
+			t.Fatalf("%s: %v", s.Name(), err)
+		}
+		for _, a := range seed {
+			if a.Subject != s.Name() || a.Clock["version"] == "" || a.Origin != "builtin:"+s.Name() {
+				t.Fatalf("bad seed axiom for %s: %+v", s.Name(), a)
+			}
+		}
+	}
+	for _, want := range []string{"golang.org/x/crypto", "golang.org/x/mod", "golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "golang.org/x/tools"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("%s not shipped: %v", want, names)
+		}
+	}
+	if !sort.StringsAreSorted(names) {
+		t.Fatalf("not sorted: %v", names)
 	}
 }
 
@@ -108,13 +141,13 @@ func TestDetect(t *testing.T) {
 func TestPrompts(t *testing.T) {
 	s := Subject{Module: "github.com/Azure/azure-sdk-for-go"}
 	ins := s.UpdateInstructions()
-	for _, want := range []string{"github.com/Azure/azure-sdk-for-go", "proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/list", "propose_axiom", "append-only log"} {
+	for _, want := range []string{"github.com/Azure/azure-sdk-for-go", "proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/list", "propose_axiom", "append-only log", "batch_commits", "go list -m -json github.com/Azure/azure-sdk-for-go@latest", `git log --reverse --format='%H %cI'`} {
 		if !strings.Contains(ins, want) {
 			t.Fatalf("instructions lack %q:\n%s", want, ins)
 		}
 	}
 	empty := s.UpdateTask(nil)
-	if !strings.Contains(empty, "holds 0 axioms") || !strings.Contains(empty, "after 2023-08-01, the global epoch") || strings.Contains(empty, "newest release it covers") {
+	if !strings.Contains(empty, "holds 0 axioms") || !strings.Contains(empty, "after 2023-08-01, the global epoch") || strings.Contains(empty, "newest release it covers") || !strings.Contains(empty, "batch_commits") {
 		t.Fatalf("empty task:\n%s", empty)
 	}
 	existing := []axiom.Axiom{

@@ -25,6 +25,7 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 
 	"github.com/canonical/axiomaton/internal/axiom"
+	"github.com/canonical/axiomaton/internal/subjects/gomod"
 )
 
 const maxToolOutput = 24 * 1024
@@ -163,6 +164,75 @@ func ProposeTool(p *Proposals, logf func(string, ...any)) (tool.FuncTool, error)
 			} else {
 				logf("rejected proposal: %s", out.Message)
 			}
+		}
+		return out, nil
+	})
+}
+
+// BatchInput is the argument to the batch_commits tool.
+type BatchInput struct {
+	Commits []BatchCommit `json:"commits" jsonschema:"Every commit on the module's main branch in the range to cover, in any order."`
+	// BaseVersion is the newest tag before the commits, shaping the
+	// pseudo-versions as the go command would.
+	BaseVersion string `json:"base_version,omitempty" jsonschema:"The newest tagged version that precedes these commits, e.g. v0.5.0, or empty if the module has never been tagged."`
+}
+
+// BatchCommit is one commit in BatchInput.
+type BatchCommit struct {
+	Hash string `json:"hash" jsonschema:"The full commit hash."`
+	Time string `json:"time" jsonschema:"The commit time as RFC 3339, e.g. from git log --format=%cI."`
+	Go   string `json:"go,omitempty" jsonschema:"The go directive of go.mod at this commit, e.g. 1.24; omit if unknown."`
+}
+
+// BatchRelease is one release in BatchOutput.
+type BatchRelease struct {
+	Version   string `json:"version"`
+	Date      string `json:"date"`
+	First     string `json:"first_commit"`
+	Last      string `json:"last_commit"`
+	Commits   int    `json:"commits"`
+	GoVersion string `json:"go,omitempty"`
+	Reason    string `json:"opened_because"`
+}
+
+// BatchOutput is the result of the batch_commits tool.
+type BatchOutput struct {
+	Releases []BatchRelease `json:"releases"`
+	Message  string         `json:"message"`
+}
+
+// BatchTool groups an untagged module's commits into releases for the
+// update agent, so that every run of ax divides the same history the same
+// way. See gomod.Batch for the rules.
+func BatchTool(logf func(string, ...any)) (tool.FuncTool, error) {
+	return functool.New(functool.Config{
+		Name: "batch_commits",
+		Description: "For a Go module with no tagged releases: group its commit history into discrete " +
+			"releases. A new release starts when the go directive changes, after a gap of more than a month, " +
+			"or at a new calendar month. Each release gets the pseudo-version of its last commit; use that " +
+			"as the clock and its date as the date when proposing axioms for changes in that release.",
+	}, func(_ context.Context, in BatchInput) (BatchOutput, error) {
+		commits := make([]gomod.Commit, 0, len(in.Commits))
+		for _, c := range in.Commits {
+			t, err := time.Parse(time.RFC3339, strings.TrimSpace(c.Time))
+			if err != nil {
+				return BatchOutput{Message: fmt.Sprintf("commit %s: time %q is not RFC 3339 (use git log --format=%%cI)", c.Hash, c.Time)}, nil
+			}
+			if strings.TrimSpace(c.Hash) == "" {
+				return BatchOutput{Message: "every commit needs a hash"}, nil
+			}
+			commits = append(commits, gomod.Commit{Hash: strings.TrimSpace(c.Hash), Time: t, GoVersion: strings.TrimPrefix(strings.TrimSpace(c.Go), "go")})
+		}
+		var out BatchOutput
+		for _, r := range gomod.Batch(commits, strings.TrimSpace(in.BaseVersion)) {
+			out.Releases = append(out.Releases, BatchRelease{
+				Version: r.Version, Date: r.Time.Format("2006-01-02"), First: r.First, Last: r.Last,
+				Commits: r.Commits, GoVersion: r.GoVersion, Reason: r.Reason,
+			})
+		}
+		out.Message = fmt.Sprintf("%d commit(s) grouped into %d release(s); review each release's changes (git diff <previous last_commit>..<last_commit>) and propose axioms with its version as the clock and its date as the date", len(commits), len(out.Releases))
+		if logf != nil {
+			logf("batched %d commit(s) into %d release(s)", len(commits), len(out.Releases))
 		}
 		return out, nil
 	})

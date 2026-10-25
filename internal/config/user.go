@@ -83,6 +83,16 @@ type Update struct {
 	Confirmations int `yaml:"confirmations"`
 }
 
+// Proxy configures the caching proxy that agent containers download
+// through.
+type Proxy struct {
+	// Disabled turns the proxy off; containers then get podman's default
+	// network, with nothing cached and no restriction on what leaves.
+	Disabled bool `yaml:"disabled"`
+	// MaxObjectMB is the largest download kept in the cache.
+	MaxObjectMB int `yaml:"max_object_mb"`
+}
+
 // Retry tunes how model requests are retried after rate limits and
 // transient failures. Backoff is exponential with full jitter, capped at
 // MaxBackoff, and a Retry-After header from the server is honoured.
@@ -107,6 +117,7 @@ type User struct {
 	Search        Search              `yaml:"search"`
 	Retry         Retry               `yaml:"retry"`
 	Update        Update              `yaml:"update"`
+	Proxy         Proxy               `yaml:"proxy"`
 
 	// Path is where the config was read from, or empty if defaults are in use.
 	Path string `yaml:"-"`
@@ -143,6 +154,9 @@ func DefaultUser() User {
 			MaxIterations: 80,
 			ExecTimeout:   300,
 			Confirmations: DefaultConfirmations(),
+		},
+		Proxy: Proxy{
+			MaxObjectMB: 1024,
 		},
 	}
 }
@@ -216,6 +230,10 @@ func (u *User) merge(o User) {
 	}
 	if o.Update.Confirmations > 0 {
 		u.Update.Confirmations = o.Update.Confirmations
+	}
+	u.Proxy.Disabled = u.Proxy.Disabled || o.Proxy.Disabled
+	if o.Proxy.MaxObjectMB > 0 {
+		u.Proxy.MaxObjectMB = o.Proxy.MaxObjectMB
 	}
 	if o.Update.ExecTimeout > 0 {
 		u.Update.ExecTimeout = o.Update.ExecTimeout
