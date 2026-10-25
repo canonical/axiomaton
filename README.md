@@ -69,8 +69,9 @@ Run `ax init` in a project to create its `axiomaton.cnf` (and an empty
 and every direct requirement in that `go.mod` adds a
 `go:<module path>` subject (e.g. `go:golang.org/x/net`);
 indirect requirements are skipped. `rust` is listed when a `Cargo.toml` is
-found the same way, and `python` when a `pyproject.toml`, `setup.py`,
-`setup.cfg`, `Pipfile` or `requirements.txt` is. Detected subjects are written without a
+found the same way, `python` when a `pyproject.toml`, `setup.py`,
+`setup.cfg`, `Pipfile` or `requirements.txt` is, and `zig` when a `build.zig`
+or `build.zig.zon` is. Detected subjects are written without a
 clock, and a built-in subject named without a clock, in the file or on the
 command line, takes its clock from the project at query time (`go` uses
 the `go` directive in `go.mod`; `go:<module>` uses that module's
@@ -79,8 +80,9 @@ the `go` directive in `go.mod`; `go:<module>` uses that module's
 inheritance to the workspace root; `python` uses the release pinned in
 `.python-version`, else the lower bound of `requires-python` in
 `pyproject.toml`, a Poetry `python` constraint, or a Pipfile
-`python_version`), so the file never goes stale. A project that pins
-nothing is reported without a clock, i.e. every release.
+`python_version`; `zig` uses the compiler pinned in `.zigversion`, else
+`minimum_zig_version` in `build.zig.zon`), so the file never goes stale. A
+project that pins nothing is reported without a clock, i.e. every release.
 Give an explicit clock to pin a version instead. Further built-in subjects can
 be named as arguments, e.g. `ax init go go:golang.org/x/text`, and
 dependencies you do not want reported on can simply be deleted from the file.
@@ -181,6 +183,7 @@ The `ax` tool also contains these other commands:
 - `ax update go`
 - `ax update rust`
 - `ax update python`
+- `ax update zig`
 - `ax update go:golang.org/x/net`
 - `ax subjects`
 - `ax init`
@@ -191,7 +194,7 @@ repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
 repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
 The update command only works for built-in subjects: `go`, `python`, `rust`,
-and `go:<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
+`zig`, and `go:<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
 agent is run (using github.com/microsoft/agent-framework-go, running a podman container,
 with tool calls running inside the container via podman exec), to update the axiomlog
 based on go's release notes. For a module subject the agent takes the release
@@ -228,7 +231,10 @@ with `ax update rust -l internal/subjects/rust/axiomlog`; the agent reads
 RELEASES.md from rust-lang/rust and installs toolchains with rustup. The
 python log at `internal/subjects/python/axiomlog` comes from
 `ax update python -l internal/subjects/python/axiomlog`; the agent reads the
-What's New documents and installs exact CPython releases with uv.
+What's New documents and installs exact CPython releases with uv. The zig
+log at `internal/subjects/zig/axiomlog` comes from
+`ax update zig -l internal/subjects/zig/axiomlog`; the agent reads each
+version's release notes and the download index on ziglang.org.
 
 ## Log format
 

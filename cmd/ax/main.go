@@ -58,18 +58,20 @@ Commands:
             version from its own files (go: the go directive in go.mod;
             go:<module>: that module's require line in go.mod; rust: the
             pinned toolchain or the rust-version in Cargo.toml; python:
-            .python-version or the requires-python lower bound).
+            .python-version or the requires-python lower bound; zig:
+            .zigversion or minimum_zig_version in build.zig.zon).
   for       Like since, with the cutoff taken from the knowledge cutoff that
             OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
   add       Append an axiom to the nearest writeable axiomlog.
   update    Run containerised agents to extend the log of a built-in subject
-            (go, python, rust, or go:<module> for a Go module dependency).
+            (go, python, rust, zig, or go:<module> for a Go module
+            dependency).
   subjects  List known subjects and where they come from.
   init      Write an axiomaton.cnf for this project listing the built-in
             subjects detected here (go and one go:<module> subject per
             direct dependency, from go.mod; rust from Cargo.toml; python
             from pyproject.toml, setup.py, setup.cfg, Pipfile or
-            requirements.txt).
+            requirements.txt; zig from build.zig or build.zig.zon).
   setup     Write ax.cnf interactively and test the configured models.
 
 Global flags:

@@ -123,7 +123,7 @@ func TestCLI(t *testing.T) {
 	if err != nil || !strings.Contains(errOut, "already recorded") {
 		t.Fatalf("duplicate add: %v %s", err, errOut)
 	}
-	if _, _, err = exec("add", "2026-09-01", "zig", "0.14", "x"); err == nil || !strings.Contains(err.Error(), "no declared clock shape") {
+	if _, _, err = exec("add", "2026-09-01", "nim", "2.2", "x"); err == nil || !strings.Contains(err.Error(), "no declared clock shape") {
 		t.Fatalf("undeclared subject add should fail: %v", err)
 	}
 	if _, _, err = exec("add", "2026-09-01", "svc", "banana", "x"); err == nil {
@@ -168,8 +168,8 @@ func TestCLI(t *testing.T) {
 	if err := run(context.Background(), []string{"bogus"}, &out2, &err2); err == nil {
 		t.Fatal("unknown command should fail")
 	}
-	if _, _, err := exec("update", "zig"); err == nil || !strings.Contains(err.Error(), "built-in") {
-		t.Fatalf("update zig: %v", err)
+	if _, _, err := exec("update", "nim"); err == nil || !strings.Contains(err.Error(), "built-in") {
+		t.Fatalf("update nim: %v", err)
 	}
 }
 
@@ -212,8 +212,8 @@ func TestInit(t *testing.T) {
 	if _, _, err := exec(filepath.Join(repo, "pkg"), "init"); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("second init: %v", err)
 	}
-	if _, _, err := exec(filepath.Join(repo, "pkg"), "init", "-force", "zig"); err == nil || !strings.Contains(err.Error(), "not a built-in subject") {
-		t.Fatalf("init zig: %v", err)
+	if _, _, err := exec(filepath.Join(repo, "pkg"), "init", "-force", "nim"); err == nil || !strings.Contains(err.Error(), "not a built-in subject") {
+		t.Fatalf("init nim: %v", err)
 	}
 
 	// Defaults now come from the file, with the clock read from go.mod.
@@ -333,6 +333,28 @@ func TestInit(t *testing.T) {
 	out, _, _ = exec(py, "since", "2024-01-01")
 	if !strings.Contains(out, "## python (version <= 3.13.1)") || !strings.Contains(out, "- **[3.13.0]** python fact") {
 		t.Fatalf("pinned interpreter:\n%s", out)
+	}
+
+	// A Zig project: detected from build.zig, clocked by minimum_zig_version.
+	zg := filepath.Join(root, "zig")
+	os.MkdirAll(filepath.Join(zg, ".git"), 0o755)
+	os.WriteFile(filepath.Join(zg, "build.zig"), []byte("const std = @import(\"std\");\n"), 0o644)
+	os.WriteFile(filepath.Join(zg, "build.zig.zon"), []byte(".{\n    .name = .z,\n    .minimum_zig_version = \"0.13.0\",\n}\n"), 0o644)
+	_, errOut, err = exec(zg, "init")
+	if err != nil || !strings.Contains(errOut, "zig @ 0.13.0 (from build.zig.zon)") {
+		t.Fatalf("zig init: %v %s", err, errOut)
+	}
+	if _, _, err = exec(zg, "add", "2025-03-05", "zig", "0.14.0", "zig fact"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = exec(zg, "since", "2024-01-01")
+	if strings.Contains(out, "zig fact") {
+		t.Fatalf("0.14.0 axiom must not apply at minimum_zig_version 0.13.0:\n%s", out)
+	}
+	os.WriteFile(filepath.Join(zg, ".zigversion"), []byte("0.14.1\n"), 0o644)
+	out, _, _ = exec(zg, "since", "2024-01-01")
+	if !strings.Contains(out, "## zig (version <= 0.14.1)") || !strings.Contains(out, "- **[0.14.0]** zig fact") {
+		t.Fatalf("pinned compiler:\n%s", out)
 	}
 	_, errOut, err = exec(other, "init", "-force", "go")
 	if err != nil || !strings.Contains(errOut, "ax:   go") {

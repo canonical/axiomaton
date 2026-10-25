@@ -30,7 +30,7 @@ func TestSeeds(t *testing.T) {
 	// its own subject's axioms. Seeds other than go may be empty until
 	// generated with ax update.
 	names := staticNames()
-	if len(seeds) != len(names) || strings.Join(names, ",") != "go,python,rust" || len(seeds[0]) < 20 {
+	if len(seeds) != len(names) || strings.Join(names, ",") != "go,python,rust,zig" || len(seeds[0]) < 20 {
 		t.Fatalf("unexpected seeds: %d for %v", len(seeds), names)
 	}
 	for i, seed := range seeds {
@@ -51,7 +51,7 @@ func TestSeeds(t *testing.T) {
 }
 
 func TestFamilies(t *testing.T) {
-	if got := strings.Join(Names(), ","); got != "go,python,rust,go:<module path>" {
+	if got := strings.Join(Names(), ","); got != "go,python,rust,zig,go:<module path>" {
 		t.Fatalf("names: %s", got)
 	}
 	b, ok := Lookup("go:golang.org/x/net")
@@ -108,5 +108,10 @@ func TestDetect(t *testing.T) {
 	d = Detect(repo)
 	if len(d) != 2 || d[0].Subject.Name() != "python" || d[0].Clock[0] != "3.12" || d[1].Subject.Name() != "rust" {
 		t.Fatalf("python and rust: %+v", d)
+	}
+	os.WriteFile(filepath.Join(repo, "build.zig.zon"), []byte(".{ .minimum_zig_version = \"0.14.0\" }\n"), 0o644)
+	d = Detect(repo)
+	if len(d) != 3 || d[2].Subject.Name() != "zig" || d[2].Clock[0] != "0.14.0" {
+		t.Fatalf("zig: %+v", d)
 	}
 }

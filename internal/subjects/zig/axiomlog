@@ -1,0 +1,2 @@
+# Built-in axioms for the Zig programming language. Append-only JSON lines.
+# Regenerate with: ax update zig -l internal/subjects/zig/axiomlog
