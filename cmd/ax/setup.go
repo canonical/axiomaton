@@ -29,6 +29,7 @@ import (
 	"github.com/canonical/axiomaton/internal/config"
 	"github.com/canonical/axiomaton/internal/models"
 	"github.com/canonical/axiomaton/internal/models/openrouter"
+	"github.com/canonical/axiomaton/internal/update"
 )
 
 // stdin and interactive are variables so tests can script the wizard.
@@ -55,7 +56,7 @@ func (a *app) setup(ctx context.Context, args []string) error {
 	fs.SetOutput(a.stderr)
 	yes := fs.Bool("y", false, "accept defaults and flags without prompting")
 	force := fs.Bool("force", false, "replace an existing ax.cnf without asking")
-	noCheck := fs.Bool("no-check", false, "do not test the configured models and podman")
+	noCheck := fs.Bool("no-check", false, "do not test the configured models and the agent backend")
 	baseURL := fs.String("base-url", "", "provider base URL (default https://openrouter.ai/api)")
 	key := fs.String("key", "", "API key to store in ax.cnf (default: read from the environment at run time)")
 	keyEnv := fs.String("key-env", "", "environment variable holding the API key (default OPENROUTER_API_KEY)")
@@ -178,8 +179,8 @@ func (a *app) setup(ctx context.Context, args []string) error {
 }
 
 // check probes every configured model with a tiny request and looks for
-// podman. Model failures make the command fail; a missing podman only
-// disables ax update, so it is a warning.
+// podman and LXD. Model failures make the command fail; a missing backend
+// only disables ax update, so it is a warning.
 func (a *app) check(ctx context.Context, cfg config.User) error {
 	failed := 0
 	report := func(name, status, detail string) {
@@ -208,9 +209,19 @@ func (a *app) check(ctx context.Context, cfg config.User) error {
 		report(role, "ok", fmt.Sprintf("%s (%s)", ep.Model, time.Since(start).Round(time.Millisecond)))
 	}
 	if out, err := exec.CommandContext(ctx, "podman", "--version").Output(); err != nil {
-		report("podman", "warn", "not found; ax update needs podman on PATH")
+		report("podman", "warn", "not found")
 	} else {
 		report("podman", "ok", strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.CommandContext(ctx, "lxc", "version").Output(); err != nil {
+		report("lxd", "warn", "not found")
+	} else {
+		report("lxd", "ok", strings.Join(strings.Fields(string(out)), " "))
+	}
+	if backend, err := update.ResolveBackend(cfg.Update.Backend, false); err != nil {
+		report("backend", "warn", err.Error()+"; ax update needs one of them")
+	} else {
+		report("backend", "ok", fmt.Sprintf("%s (update.backend: %s)", backend, cfg.Update.Backend))
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d model check(s) failed; the configuration was written, fix it or rerun ax setup", failed)

@@ -74,7 +74,14 @@ type Search struct {
 
 // Update tunes the containerised update agents.
 type Update struct {
-	Image         string `yaml:"image"`
+	// Backend runs the agents: "auto" (podman if installed, else lxd),
+	// "podman", "lxd" (system containers) or "lxd-vm" (virtual machines).
+	Backend string `yaml:"backend"`
+	// Image is the podman image.
+	Image string `yaml:"image"`
+	// LXDImage is the LXD image for containers and virtual machines, e.g.
+	// ubuntu:24.04.
+	LXDImage      string `yaml:"lxd_image"`
 	MaxIterations int    `yaml:"max_iterations"`
 	// ExecTimeout bounds each tool command inside the container, in seconds.
 	ExecTimeout int `yaml:"exec_timeout"`
@@ -150,7 +157,9 @@ func DefaultUser() User {
 			MaxBackoff:     60,
 		},
 		Update: Update{
+			Backend:       "auto",
 			Image:         "public.ecr.aws/ubuntu/ubuntu:latest",
+			LXDImage:      "ubuntu:24.04",
 			MaxIterations: 80,
 			ExecTimeout:   300,
 			Confirmations: DefaultConfirmations(),
@@ -222,8 +231,14 @@ func (u *User) merge(o User) {
 	if o.Retry.MaxBackoff > 0 {
 		u.Retry.MaxBackoff = o.Retry.MaxBackoff
 	}
+	if o.Update.Backend != "" {
+		u.Update.Backend = o.Update.Backend
+	}
 	if o.Update.Image != "" {
 		u.Update.Image = o.Update.Image
+	}
+	if o.Update.LXDImage != "" {
+		u.Update.LXDImage = o.Update.LXDImage
 	}
 	if o.Update.MaxIterations > 0 {
 		u.Update.MaxIterations = o.Update.MaxIterations

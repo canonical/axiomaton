@@ -53,7 +53,7 @@ type Server struct {
 	ConnectPorts []string
 
 	mu    sync.Mutex
-	ln    net.Listener
+	lns   []net.Listener
 	srv   *http.Server
 	locks sync.Map // url -> *sync.Mutex, one download at a time per URL
 }
@@ -100,7 +100,8 @@ func (s *Server) transport() http.RoundTripper {
 }
 
 // Start listens on a TCP addr (host:port, port 0 for any) and serves in
-// the background. It returns the bound address.
+// the background. It returns the bound address. A server may listen on
+// several addresses and sockets at once.
 func (s *Server) Start(addr string) (string, error) {
 	ln, err := s.listen("tcp", addr)
 	if err != nil {
@@ -109,15 +110,27 @@ func (s *Server) Start(addr string) (string, error) {
 	return ln.Addr().String(), nil
 }
 
+// StartRange listens on host at the first free port in [from, to], so
+// that a fixed firewall rule can cover every ax process on the machine.
+func (s *Server) StartRange(host string, from, to int) (string, error) {
+	var last error
+	for port := from; port <= to; port++ {
+		addr, err := s.Start(net.JoinHostPort(host, strconv.Itoa(port)))
+		if err == nil {
+			return addr, nil
+		}
+		last = err
+	}
+	return "", fmt.Errorf("no free port on %s between %d and %d: %w", host, from, to, last)
+}
+
 // StartUnix serves on a unix socket at path, which containers reach
 // through a forwarder in their own network namespace (see Forward).
 func (s *Server) StartUnix(path string) error {
-	s.mu.Lock()
-	already := s.ln != nil
-	s.mu.Unlock()
-	if !already {
-		os.Remove(path)
+	if s.SocketPath() != "" {
+		return nil
 	}
+	os.Remove(path)
 	_, err := s.listen("unix", path)
 	return err
 }
@@ -125,8 +138,10 @@ func (s *Server) StartUnix(path string) error {
 func (s *Server) listen(network, addr string) (net.Listener, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ln != nil {
-		return s.ln, nil
+	for _, ln := range s.lns {
+		if ln.Addr().Network() == network && ln.Addr().String() == addr {
+			return ln, nil
+		}
 	}
 	ln, err := net.Listen(network, addr)
 	if err != nil {
@@ -135,34 +150,34 @@ func (s *Server) listen(network, addr string) (net.Listener, error) {
 	if network == "unix" {
 		os.Chmod(addr, 0o600)
 	}
-	s.ln = ln
-	s.srv = &http.Server{Handler: s, ReadHeaderTimeout: 30 * time.Second}
+	if s.srv == nil {
+		s.srv = &http.Server{Handler: s, ReadHeaderTimeout: 30 * time.Second}
+	}
+	s.lns = append(s.lns, ln)
 	go s.srv.Serve(ln)
 	return ln, nil
 }
 
-// Port is the listening TCP port, or 0 before Start or on a unix socket.
+// Port is the first listening TCP port, or 0 when there is none.
 func (s *Server) Port() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ln == nil {
-		return 0
-	}
-	if a, ok := s.ln.Addr().(*net.TCPAddr); ok {
-		return a.Port
+	for _, ln := range s.lns {
+		if a, ok := ln.Addr().(*net.TCPAddr); ok {
+			return a.Port
+		}
 	}
 	return 0
 }
 
-// SocketPath is the unix socket path, or "" when serving TCP.
+// SocketPath is the unix socket path, or "" when there is none.
 func (s *Server) SocketPath() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ln == nil {
-		return ""
-	}
-	if a, ok := s.ln.Addr().(*net.UnixAddr); ok {
-		return a.Name
+	for _, ln := range s.lns {
+		if a, ok := ln.Addr().(*net.UnixAddr); ok {
+			return a.Name
+		}
 	}
 	return ""
 }
@@ -176,7 +191,7 @@ func (s *Server) URL(hostPort string) string {
 	return u.String()
 }
 
-// Close stops serving and removes a unix socket.
+// Close stops serving and removes any unix socket.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -186,10 +201,12 @@ func (s *Server) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := s.srv.Shutdown(ctx)
-	if a, ok := s.ln.Addr().(*net.UnixAddr); ok {
-		os.Remove(a.Name)
+	for _, ln := range s.lns {
+		if a, ok := ln.Addr().(*net.UnixAddr); ok {
+			os.Remove(a.Name)
+		}
 	}
-	s.srv, s.ln = nil, nil
+	s.srv, s.lns = nil, nil
 	return err
 }
 

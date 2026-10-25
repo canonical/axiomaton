@@ -165,7 +165,9 @@ retry:
   initial_backoff: 1                # seconds; doubles each attempt, with jitter
   max_backoff: 60                   # seconds
 update:
-  image: public.ecr.aws/ubuntu/ubuntu:latest
+  backend: auto                     # podman if installed, else lxd; or podman, lxd, lxd-vm
+  image: public.ecr.aws/ubuntu/ubuntu:latest   # podman image
+  lxd_image: ubuntu:24.04           # LXD image for containers and virtual machines
   max_iterations: 80                # tool calls per agent run
   exec_timeout: 300                 # seconds per command in the container
   confirmations: 4                  # confirmation agents at once (default: half the CPUs)
@@ -199,10 +201,16 @@ repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
 repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
 The update command only works for built-in subjects: `go`, `python`, `rust`,
-`zig`, and `go:<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
-agent is run (using github.com/microsoft/agent-framework-go, running a podman container,
-with tool calls running inside the container via podman exec), to update the axiomlog
-based on go's release notes. For a module subject the agent takes the release
+`zig`, and `go:<module path>` for any Go module. All subject updates are performed as such, firstly, a sandboxed
+agent is run (using github.com/microsoft/agent-framework-go, with tool calls
+running inside a fresh instance), to update the axiomlog
+based on go's release notes. The instance is a podman container when podman
+is installed and an LXD system container otherwise (`update.backend`
+chooses explicitly: `podman`, `lxd`, or `lxd-vm` for LXD virtual machines).
+A built-in subject can declare that its agents need a real machine by
+implementing `RequiresVM() bool`; such subjects always run in an LXD virtual
+machine, and fail with a clear message if LXD is not installed. None of the
+shipped subjects needs one yet. For a module subject the agent takes the release
 list and dates from the module proxy and works out what changed for callers
 from the module's release notes, an API comparison between tags (apidiff) and
 the commit log, starting from the newest release the log already covers, or,
@@ -259,20 +267,28 @@ adding a directory with an `axiomlog` there ships another module.
 
 ### Cache proxy and network isolation
 
-Agent containers are created with no network of their own (`--network
-none`). Their only way out is a caching forward proxy that `ax` runs on the
-host for the length of the command: for each container `ax` runs a small
-forwarder of its own binary inside the container's network namespace (via
-`nsenter`, under `podman unshare` when rootless) that relays
-`127.0.0.1:3128` in the container to the proxy's unix socket on the host.
-The proxy speaks only HTTP: plain requests are relayed by URL, and `CONNECT`
+Agent instances have no way to the network except a caching forward proxy
+that `ax` runs on the host for the length of the command. Podman containers
+are created with no network of their own (`--network none`), and for each
+one `ax` runs a small forwarder of its own binary inside the container's
+network namespace (via `nsenter`, under `podman unshare` when rootless) that
+relays `127.0.0.1:3128` in the container to the proxy's unix socket on the
+host. LXD containers and virtual machines are attached to a dedicated bridge
+network named `axiomaton` that `ax` creates with no NAT and no routing and a
+network ACL that drops all egress except DHCP and TCP to ports 31280-31299
+on the host's side of the bridge, where the proxy listens (one port per
+running `ax`); before an instance is used `ax` checks from inside it that
+the proxy answers and that the internet does not. The network and ACL are
+created once and shared by every `ax` on the machine; `lxc network delete
+axiomaton` and `lxc network acl delete axiomaton` remove them. The proxy
+speaks only HTTP: plain requests are relayed by URL, and `CONNECT`
 is accepted for port 443 alone and even then terminated by the proxy, which
 presents a certificate from its own authority and talks HTTPS to the origin
 itself. Nothing else can leave the container, so SSH, raw TCP and any other
 protocol are blocked by construction rather than by a firewall rule the
-agent could undo. A container that cannot be attached to the proxy is not
-started. Setting `proxy.disabled: true` gives containers podman's default
-network, with no caching and no restriction.
+agent could undo. An instance that cannot be attached to the proxy is not
+started. Setting `proxy.disabled: true` gives instances the backend's
+default network, with no caching and no restriction.
 
 The CA is generated on first use and kept at
 `$XDG_DATA_HOME/axiomaton/proxy/ca.crt` (key readable by the owner only).
@@ -328,5 +344,6 @@ is a content hash and is recomputed on read.
 ```sh
 go build ./cmd/ax
 go test ./...
-AX_PODMAN_TEST=1 go test ./internal/update/ -run TestPodmanIntegration   # needs podman and network
+AX_PODMAN_TEST=1 go test ./internal/update/ -run TestPodman      # needs podman and network
+AX_LXD_TEST=1 go test ./internal/update/ -run TestLXDIntegration  # needs LXD; AX_LXD_VM_TEST=1 for a VM
 ```

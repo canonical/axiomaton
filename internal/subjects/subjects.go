@@ -47,6 +47,20 @@ type Builtin interface {
 	Detect(dir string) (clock []string, source string, ok bool)
 }
 
+// VMRequirer is implemented by built-in subjects whose agents need a full
+// virtual machine rather than a container (a real kernel, systemd, nested
+// virtualisation and so on). Such subjects are always updated and confirmed
+// in an LXD virtual machine, whatever backend is configured.
+type VMRequirer interface {
+	RequiresVM() bool
+}
+
+// RequiresVM reports whether b's agents must run in a virtual machine.
+func RequiresVM(b Builtin) bool {
+	r, ok := b.(VMRequirer)
+	return ok && r.RequiresVM()
+}
+
 // Detected is a built-in subject found in a project directory.
 type Detected struct {
 	Subject Builtin

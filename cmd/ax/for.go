@@ -78,14 +78,17 @@ func (a *app) forCmd(ctx context.Context, args []string) error {
 	return a.report(ctx, date, rest[1:], *summarise)
 }
 
-// research looks a cutoff up with a containerised agent. It is a variable
-// so tests can stand in for podman and the model.
+// research looks a cutoff up with a sandboxed agent. It is a variable so
+// tests can stand in for the runtime and the model.
 var research = func(ctx context.Context, a *app, cfg config.User, m cutoff.Model) (cutoff.Record, bool, error) {
 	ep, err := cfg.Resolve(config.RoleAgent)
 	if err != nil {
 		return cutoff.Record{}, false, err
 	}
-	rt, ag := a.agentParts(cfg, ep, "")
+	rt, ag, err := a.agentParts(cfg, ep, "", false)
+	if err != nil {
+		return cutoff.Record{}, false, err
+	}
 	r := cutoff.Researcher{Runtime: rt, Agent: ag, ExecTimeout: time.Duration(cfg.Update.ExecTimeout) * time.Second, Log: a.logf}
 	return r.Find(ctx, m)
 }

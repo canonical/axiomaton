@@ -64,9 +64,9 @@ Commands:
   for       Like since, with the cutoff taken from the knowledge cutoff that
             OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
   add       Append an axiom to the nearest writeable axiomlog.
-  update    Run containerised agents to extend the log of a built-in subject
-            (go, python, rust, zig, or go:<module> for a Go module
-            dependency).
+  update    Run sandboxed agents (podman, or LXD containers or VMs) to
+            extend the log of a built-in subject (go, python, rust, zig,
+            or go:<module> for a Go module dependency).
   subjects  List known subjects and where they come from.
   init      Write an axiomaton.cnf for this project listing the built-in
             subjects detected here (go and one go:<module> subject per
@@ -482,7 +482,7 @@ func (a *app) update(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("ax update", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	logPath := fs.String("l", "", "axiomlog file to append to (default: nearest writeable log)")
-	image := fs.String("image", "", "container image for the agents (default from ax.cnf)")
+	image := fs.String("image", "", "image for the agents (default from ax.cnf for the backend in use)")
 	yes := fs.Bool("y", false, "accept unconfirmed axioms without asking")
 	jobs := fs.Int("j", 0, "confirmation agents to run at once (default from ax.cnf: half the CPUs)")
 	fs.Usage = func() {
@@ -517,7 +517,10 @@ func (a *app) update(ctx context.Context, args []string) error {
 		}
 	}
 	progress := func(format string, args ...any) { fmt.Fprintf(a.stderr, "ax: "+format+"\n", args...) }
-	rt, ag := a.agentParts(e.cfg, ep, *image)
+	rt, ag, err := a.agentParts(e.cfg, ep, *image, subjects.RequiresVM(builtin))
+	if err != nil {
+		return err
+	}
 	u := &update.Updater{
 		Subject:     builtin,
 		Runtime:     rt,
@@ -598,25 +601,40 @@ func (a *app) update(ctx context.Context, args []string) error {
 	return nil
 }
 
-// agentParts builds the podman runtime and framework agent used by the
-// containerised commands. An empty image means the configured one.
-func (a *app) agentParts(cfg config.User, ep config.Endpoint, image string) (update.Podman, update.FrameworkAgent) {
-	if image == "" {
-		image = cfg.Update.Image
+// agentParts builds the runtime and framework agent used by the
+// sandboxed commands. The backend comes from the configuration (podman if
+// installed, else LXD) unless needVM asks for an LXD virtual machine. An
+// empty image means the backend's configured one.
+func (a *app) agentParts(cfg config.User, ep config.Endpoint, image string, needVM bool) (update.Runtime, update.FrameworkAgent, error) {
+	backend, err := update.ResolveBackend(cfg.Update.Backend, needVM)
+	if err != nil {
+		return nil, update.FrameworkAgent{}, err
 	}
 	var logger *slog.Logger
 	if a.verbose {
 		logger = slog.New(slog.NewTextHandler(a.stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	}
-	rt := update.Podman{Image: image, Log: a.logf}
+	var prx *proxy.Server
 	if !cfg.Proxy.Disabled {
-		if srv, err := a.cacheProxy(cfg); err != nil {
-			a.warnf("cache proxy unavailable; containers download directly: %v", err)
-		} else {
-			rt.Proxy = srv
+		if prx, err = a.cacheProxy(cfg); err != nil {
+			a.warnf("cache proxy unavailable; instances use ordinary networking: %v", err)
 		}
 	}
-	return rt, update.FrameworkAgent{Endpoint: ep, MaxIterations: cfg.Update.MaxIterations, MaxRetries: cfg.Retry.MaxAttempts - 1, Logger: logger}
+	var rt update.Runtime
+	switch backend {
+	case update.BackendPodman:
+		if image == "" {
+			image = cfg.Update.Image
+		}
+		rt = update.Podman{Image: image, Log: a.logf, Proxy: prx}
+	default:
+		if image == "" {
+			image = cfg.Update.LXDImage
+		}
+		rt = update.LXD{Image: image, VM: backend == update.BackendLXDVM, Log: a.logf, Proxy: prx}
+	}
+	a.logf("agents run with %s (%s)", backend, image)
+	return rt, update.FrameworkAgent{Endpoint: ep, MaxIterations: cfg.Update.MaxIterations, MaxRetries: cfg.Retry.MaxAttempts - 1, Logger: logger}, nil
 }
 
 // shutdown releases what a command left running: the cache proxy and its
