@@ -165,7 +165,7 @@ func newFakeAgent(t *testing.T) *fakeAgent { return &fakeAgent{t: t} }
 func TestUpdaterRun(t *testing.T) {
 	rt := &fakeRuntime{}
 	ag := newFakeAgent(t)
-	b, _ := subjects.Lookup("golang")
+	b, _ := subjects.Lookup("go")
 	u := &Updater{Subject: b, Runtime: rt, Agent: ag, ExecTimeout: time.Second, Log: t.Logf}
 	props, summary, err := u.Run(context.Background(), nil)
 	if err != nil {
@@ -235,8 +235,8 @@ func TestCorrectionAlreadyKnown(t *testing.T) {
 	// confirmed again.
 	rt := &fakeRuntime{}
 	ag := newFakeAgent(t)
-	b, _ := subjects.Lookup("golang")
-	existing := axiom.Axiom{Subject: "golang", Time: time.Date(2027, 2, 9, 0, 0, 0, 0, time.UTC), Clock: map[string]string{"version": "1.28.0"}, Statement: "this is exactly true"}
+	b, _ := subjects.Lookup("go")
+	existing := axiom.Axiom{Subject: "go", Time: time.Date(2027, 2, 9, 0, 0, 0, 0, time.UTC), Clock: map[string]string{"version": "1.28.0"}, Statement: "this is exactly true"}
 	existing.Normalise()
 	u := &Updater{Subject: b, Runtime: rt, Agent: ag, ExecTimeout: time.Second, Log: t.Logf}
 	props, _, err := u.Run(context.Background(), []axiom.Axiom{existing})
@@ -259,7 +259,7 @@ func TestParallelConfirmation(t *testing.T) {
 	// back in proposal order regardless of completion order.
 	rt := &fakeRuntime{hold: make(chan struct{})}
 	ag := newFakeAgent(t)
-	b, _ := subjects.Lookup("golang")
+	b, _ := subjects.Lookup("go")
 	u := &Updater{Subject: b, Runtime: rt, Agent: ag, ExecTimeout: time.Second, Parallel: 3, Log: t.Logf}
 	done := make(chan struct{})
 	var props []Proposal

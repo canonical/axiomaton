@@ -37,8 +37,8 @@ func mk(subject, date, ver, stmt string) axiom.Axiom {
 func TestReadAppendRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "axiomlog")
-	a := mk("golang", "2026-02-10", "1.26.0", "new(expr) is allowed")
-	b := mk("golang", "2026-08-19", "1.27.0", "methods may be generic")
+	a := mk("go", "2026-02-10", "1.26.0", "new(expr) is allowed")
+	b := mk("go", "2026-08-19", "1.27.0", "methods may be generic")
 	if err := Append(path, a); err != nil {
 		t.Fatal(err)
 	}
@@ -65,16 +65,16 @@ func TestReadAppendRoundTrip(t *testing.T) {
 }
 
 func TestMerge(t *testing.T) {
-	a := mk("golang", "2026-02-10", "1.26.0", "x")
+	a := mk("go", "2026-02-10", "1.26.0", "x")
 	a.Origin = "builtin"
 	a2 := a
 	a2.Origin = "project"
-	b := mk("golang", "2026-02-10", "1.26.0", "y")
+	b := mk("go", "2026-02-10", "1.26.0", "y")
 	got := Merge([]axiom.Axiom{a}, []axiom.Axiom{a2, b})
 	if len(got) != 2 || got[0].Origin != "project" {
 		t.Fatalf("merge: %+v", got)
 	}
-	if len(Filter(got, "GoLang")) != 2 || len(Filter(got, "rust")) != 0 {
+	if len(Filter(got, "Go")) != 2 || len(Filter(got, "rust")) != 0 {
 		t.Fatal("filter")
 	}
 }
@@ -98,9 +98,9 @@ func TestDiscover(t *testing.T) {
 	writeFile(t, filepath.Join(root, "outer", "axiomaton.cnf"), "subjects: [[outer, 1]]\nshapes:\n  outer: [{name: n, kind: number}]\n")
 	writeFile(t, filepath.Join(root, "outer", "axiomlog"), `{"subject":"outer","time":"2026-01-01T00:00:00Z","clock":{"n":"1"},"statement":"outer fact"}`+"\n")
 	os.MkdirAll(filepath.Join(root, "outer", "repo", ".git"), 0o755)
-	writeFile(t, filepath.Join(root, "outer", "repo", "axiomaton.cnf"), "subjects: [[golang, 1.26.1], [svc, 1.0.0]]\nshapes:\n  svc: [{name: version, kind: semver}]\n")
-	writeFile(t, filepath.Join(root, "outer", "repo", "axiomlog"), `{"subject":"golang","time":"2026-02-10T00:00:00Z","clock":{"version":"1.26.0"},"statement":"repo fact"}`+"\n")
-	writeFile(t, filepath.Join(root, "outer", "repo", "a", "b", "axiomaton.cnf"), "subjects: [[golang, 1.25.0]]\n")
+	writeFile(t, filepath.Join(root, "outer", "repo", "axiomaton.cnf"), "subjects: [[go, 1.26.1], [svc, 1.0.0]]\nshapes:\n  svc: [{name: version, kind: semver}]\n")
+	writeFile(t, filepath.Join(root, "outer", "repo", "axiomlog"), `{"subject":"go","time":"2026-02-10T00:00:00Z","clock":{"version":"1.26.0"},"statement":"repo fact"}`+"\n")
+	writeFile(t, filepath.Join(root, "outer", "repo", "a", "b", "axiomaton.cnf"), "subjects: [[go, 1.25.0]]\n")
 	cwd := filepath.Join(root, "outer", "repo", "a", "b", "c")
 	os.MkdirAll(cwd, 0o755)
 
@@ -116,18 +116,18 @@ func TestDiscover(t *testing.T) {
 	for _, d := range defs {
 		names = append(names, d.Name+"@"+strings.Join(d.Clock, ","))
 	}
-	if strings.Join(names, " ") != "golang@1.25.0 svc@1.0.0" {
+	if strings.Join(names, " ") != "go@1.25.0 svc@1.0.0" {
 		t.Fatalf("default subjects = %v", names)
 	}
 	defs = ws.DefaultSubjects(true)
 	if len(defs) != 3 || defs[2].Name != "outer" {
 		t.Fatalf("global subjects = %+v", defs)
 	}
-	reg, err := ws.Registry(map[string][]axiom.ClockShape{"golang": {{Name: "version", Kind: axiom.KindGoVersion}}})
+	reg, err := ws.Registry(map[string][]axiom.ClockShape{"go": {{Name: "version", Kind: axiom.KindGoVersion}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range []string{"golang", "svc", "outer"} {
+	for _, n := range []string{"go", "svc", "outer"} {
 		if _, ok := reg.Lookup(n); !ok {
 			t.Fatalf("%s missing from registry", n)
 		}

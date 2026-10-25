@@ -30,7 +30,7 @@ var shape = []axiom.ClockShape{{Name: "version", Kind: axiom.KindGoVersion}}
 
 func mk(date, ver, stmt string) axiom.Axiom {
 	t, _ := time.Parse("2006-01-02", date)
-	a := axiom.Axiom{Subject: "golang", Time: t, Clock: map[string]string{"version": ver}, Statement: stmt}
+	a := axiom.Axiom{Subject: "go", Time: t, Clock: map[string]string{"version": ver}, Statement: stmt}
 	a.Normalise()
 	return a
 }
@@ -100,7 +100,7 @@ func corpus() []axiom.Axiom {
 }
 
 func TestDeterministicOnly(t *testing.T) {
-	req := Request{Since: day("2023-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
+	req := Request{Since: day("2023-01-01"), Subject: axiom.Subject{Name: "go", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
 	r, err := Evaluate(context.Background(), corpus(), req, Resolver{})
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestDeterministicOnly(t *testing.T) {
 		t.Fatalf("order/filter wrong: %+v", r.Added)
 	}
 	md := Render([]Result{r})
-	if !strings.Contains(md, "## golang (version <= 1.26.1)") || !strings.Contains(md, "### Added") || !strings.Contains(md, "resolution skipped") {
+	if !strings.Contains(md, "## go (version <= 1.26.1)") || !strings.Contains(md, "### Added") || !strings.Contains(md, "resolution skipped") {
 		t.Fatalf("markdown:\n%s", md)
 	}
 	if !strings.Contains(md, "- **[1.22]** ") || strings.Contains(md, "source") || dateLike.MatchString(md) {
@@ -132,7 +132,7 @@ func TestResolution(t *testing.T) {
 	dec := &fakeDecider{}
 	rr := &fakeReranker{}
 	res := Resolver{Embedder: fakeEmbedder{}, Decider: dec, Reranker: rr, Search: config.Search{Candidates: 4, MinSimilarity: 0.5, DecisionThreshold: 0.5}}
-	req := Request{Since: day("2023-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}}
+	req := Request{Since: day("2023-01-01"), Subject: axiom.Subject{Name: "go", Shape: shape}}
 	r, err := Evaluate(context.Background(), corpus(), req, res)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func TestFreshFolding(t *testing.T) {
 	}
 	dec := &fakeDecider{}
 	res := Resolver{Embedder: fakeEmbedder{}, Decider: dec, Search: config.Search{Candidates: 4, DecisionThreshold: 0.5}}
-	req := Request{Since: day("2023-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}}
+	req := Request{Since: day("2023-01-01"), Subject: axiom.Subject{Name: "go", Shape: shape}}
 	r, err := Evaluate(context.Background(), ax, req, res)
 	if err != nil {
 		t.Fatal(err)
@@ -205,27 +205,27 @@ func TestThreshold(t *testing.T) {
 var dateLike = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
 
 func TestNoFresh(t *testing.T) {
-	req := Request{Since: day("2030-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}}
+	req := Request{Since: day("2030-01-01"), Subject: axiom.Subject{Name: "go", Shape: shape}}
 	r, _ := Evaluate(context.Background(), corpus(), req, Resolver{})
 	if !r.Empty() || r.Prior != 7 {
 		t.Fatalf("%+v", r)
 	}
-	if md := Render([]Result{r}); !strings.Contains(md, "No changes for golang.") || strings.Contains(md, "## golang") {
+	if md := Render([]Result{r}); !strings.Contains(md, "No changes for go.") || strings.Contains(md, "## go") {
 		t.Fatal(md)
 	}
 }
 
 func TestRenderOmitsQuietSubjects(t *testing.T) {
-	busy := Request{Since: day("2024-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
+	busy := Request{Since: day("2024-01-01"), Subject: axiom.Subject{Name: "go", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
 	rb, _ := Evaluate(context.Background(), corpus(), busy, Resolver{})
-	quiet := Request{Since: day("2030-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
+	quiet := Request{Since: day("2030-01-01"), Subject: axiom.Subject{Name: "go", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
 	rq, _ := Evaluate(context.Background(), corpus(), quiet, Resolver{})
 	rq.Subject.Name = "quiet"
 	none := Result{Request: Request{Subject: axiom.Subject{Name: "empty"}}}
 	restatedOnly := Result{Request: Request{Subject: axiom.Subject{Name: "echo"}}, Restated: []Entry{{}}}
 
 	md := Render([]Result{rq, rb, none, restatedOnly})
-	if !strings.Contains(md, "## golang (version <= 1.26.1)") || !strings.Contains(md, "### Added") {
+	if !strings.Contains(md, "## go (version <= 1.26.1)") || !strings.Contains(md, "### Added") {
 		t.Fatalf("busy subject missing:\n%s", md)
 	}
 	for _, absent := range []string{"## quiet", "## empty", "## echo", "No changes"} {

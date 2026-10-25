@@ -29,12 +29,12 @@ func TestSeeds(t *testing.T) {
 	if len(seeds) != 1 || len(seeds[0]) < 20 {
 		t.Fatalf("unexpected seeds: %d", len(seeds))
 	}
-	b, ok := Lookup("golang")
+	b, ok := Lookup("go")
 	if !ok || b.Shape()[0].Name != "version" {
-		t.Fatal("golang lookup")
+		t.Fatal("go lookup")
 	}
 	for _, a := range seeds[0] {
-		if a.Subject != "golang" || a.Clock["version"] == "" {
+		if a.Subject != "go" || a.Clock["version"] == "" {
 			t.Fatalf("bad seed axiom %+v", a)
 		}
 	}
@@ -45,20 +45,20 @@ func TestSeeds(t *testing.T) {
 }
 
 func TestFamilies(t *testing.T) {
-	if got := strings.Join(Names(), ","); got != "golang,golang-mod-<module path>" {
+	if got := strings.Join(Names(), ","); got != "go,go:<module path>" {
 		t.Fatalf("names: %s", got)
 	}
-	b, ok := Lookup("golang-mod-golang.org/x/net")
-	if !ok || b.Name() != "golang-mod-golang.org/x/net" || b.Shape()[0].Kind != "semver" {
+	b, ok := Lookup("go:golang.org/x/net")
+	if !ok || b.Name() != "go:golang.org/x/net" || b.Shape()[0].Kind != "semver" {
 		t.Fatalf("family lookup: %v %v", b, ok)
 	}
-	if _, ok := Lookup("golang-mod-"); ok {
+	if _, ok := Lookup("go:"); ok {
 		t.Fatal("empty module path must not resolve")
 	}
-	if _, ok := Lookup("golang-mod-<module path>"); ok {
+	if _, ok := Lookup("go:<module path>"); ok {
 		t.Fatal("the pattern itself is not a subject")
 	}
-	if _, ok := Shapes()["golang-mod-golang.org/x/net"]; ok {
+	if _, ok := Shapes()["go:golang.org/x/net"]; ok {
 		t.Fatal("family members are not enumerable")
 	}
 }
@@ -75,12 +75,12 @@ func TestDetect(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n\ngo 1.27.2\n\ntoolchain go1.27.3\n"), 0o644)
 	d := Detect(filepath.Join(repo, "cmd", "x"))
-	if len(d) != 1 || d[0].Subject.Name() != "golang" || strings.Join(d[0].Clock, ",") != "1.27.2" || d[0].Source != filepath.Join(repo, "go.mod") {
+	if len(d) != 1 || d[0].Subject.Name() != "go" || strings.Join(d[0].Clock, ",") != "1.27.2" || d[0].Source != filepath.Join(repo, "go.mod") {
 		t.Fatalf("detect: %+v", d)
 	}
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n\ngo 1.27.2\n\nrequire (\n\tgolang.org/x/net v0.50.0\n\tgithub.com/google/uuid v1.6.0 // indirect\n)\n"), 0o644)
 	d = Detect(repo)
-	if len(d) != 2 || d[0].Subject.Name() != "golang" || d[1].Subject.Name() != "golang-mod-golang.org/x/net" || d[1].Clock[0] != "v0.50.0" {
+	if len(d) != 2 || d[0].Subject.Name() != "go" || d[1].Subject.Name() != "go:golang.org/x/net" || d[1].Clock[0] != "v0.50.0" {
 		t.Fatalf("detect with requirements: %+v", d)
 	}
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\ngo 1.26\n"), 0o644)

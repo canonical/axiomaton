@@ -89,9 +89,9 @@ func TestGit(t *testing.T) {
 
 func TestNewerAndApplies(t *testing.T) {
 	shape := []ClockShape{{Name: "version", Kind: KindGoVersion}}
-	a := Axiom{Subject: "golang", Time: date("2026-02-10"), Clock: map[string]string{"version": "1.26.0"}, Statement: "a"}
-	b := Axiom{Subject: "golang", Time: date("2026-08-19"), Clock: map[string]string{"version": "1.27.0"}, Statement: "b"}
-	c := Axiom{Subject: "golang", Time: date("2026-08-19"), Clock: map[string]string{"version": "1.26.5"}, Statement: "c"}
+	a := Axiom{Subject: "go", Time: date("2026-02-10"), Clock: map[string]string{"version": "1.26.0"}, Statement: "a"}
+	b := Axiom{Subject: "go", Time: date("2026-08-19"), Clock: map[string]string{"version": "1.27.0"}, Statement: "b"}
+	c := Axiom{Subject: "go", Time: date("2026-08-19"), Clock: map[string]string{"version": "1.26.5"}, Statement: "c"}
 	for _, x := range []*Axiom{&a, &b, &c} {
 		x.Normalise()
 	}
@@ -111,7 +111,7 @@ func TestNewerAndApplies(t *testing.T) {
 	if !Applies(b, nil, shape) {
 		t.Fatal("unconstrained query should accept everything")
 	}
-	noClock := Axiom{Subject: "golang", Time: date("2020-01-01"), Statement: "x"}
+	noClock := Axiom{Subject: "go", Time: date("2020-01-01"), Statement: "x"}
 	if !Applies(noClock, q, shape) {
 		t.Fatal("axiom without sub-clock should apply")
 	}
@@ -137,15 +137,15 @@ func TestIDStable(t *testing.T) {
 
 func TestRegistry(t *testing.T) {
 	r := NewRegistry()
-	if err := r.Define("golang", []ClockShape{{Name: "version", Kind: KindGoVersion}}); err != nil {
+	if err := r.Define("go", []ClockShape{{Name: "version", Kind: KindGoVersion}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Define("bad", []ClockShape{{Name: "c", Kind: KindGit}}); err == nil {
 		t.Fatal("git without repo should fail")
 	}
-	s, inferred := r.Resolve("golang", []string{"1.26.1"})
+	s, inferred := r.Resolve("go", []string{"1.26.1"})
 	if inferred {
-		t.Fatal("golang should not be inferred")
+		t.Fatal("go should not be inferred")
 	}
 	clock, err := s.Clock([]string{"1.26.1"})
 	if err != nil || clock["version"] != "1.26.1" {

@@ -52,19 +52,19 @@ Usage:
 
 Commands:
   since     Render the axioms for a subject that became true after <date>,
-            restricted to the subject's clock (e.g. golang 1.26.1). Without a
+            restricted to the subject's clock (e.g. go 1.26.1). Without a
             subject, the default subjects from axiomaton.cnf files are used.
             A built-in subject given without a clock reads the project's
-            version from its own files (golang: the go directive in go.mod;
-            golang-mod-<module>: that module's require line in go.mod).
+            version from its own files (go: the go directive in go.mod;
+            go:<module>: that module's require line in go.mod).
   for       Like since, with the cutoff taken from the knowledge cutoff that
             OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
   add       Append an axiom to the nearest writeable axiomlog.
   update    Run containerised agents to extend the log of a built-in subject
-            (golang, or golang-mod-<module> for a Go module dependency).
+            (go, or go:<module> for a Go module dependency).
   subjects  List known subjects and where they come from.
   init      Write an axiomaton.cnf for this project listing the built-in
-            subjects detected here (golang and one golang-mod-<module>
+            subjects detected here (go and one go:<module>
             subject per direct dependency, from go.mod).
   setup     Write ax.cnf interactively and test the configured models.
 
@@ -206,7 +206,7 @@ func (a *app) load() (*env, error) {
 		return nil, err
 	}
 	e := &env{cfg: cfg, ws: ws, reg: reg, axioms: all}
-	// Members of built-in families (golang-mod-<module>) cannot be
+	// Members of built-in families (go:<module>) cannot be
 	// registered up front; define the shape of every one in play.
 	for _, ref := range ws.DefaultSubjects(true) {
 		e.define(ref.Name)

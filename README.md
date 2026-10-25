@@ -10,13 +10,13 @@ a UTC time-stamp, but also could contain a semantic version or another ordered
 value (either independantly ordered in the case of a number or string, or externally
 ordered such as a git commit/repo pair).
 
-To query the `axiomlog`, you can run the tool with `ax since 2025-08-01 golang 1.26.1`,
-which evaluates the log, for the golang (sub-clock 1.26.1) subject
+To query the `axiomlog`, you can run the tool with `ax since 2025-08-01 go 1.26.1`,
+which evaluates the log, for the go (sub-clock 1.26.1) subject
 since 2025-08-01 (primary clock), what has changed. It produces a Markdown output
 that could be injested by a LLM in it's context. A `--summarise`/`-s` flag can be
 provided to run the determistic generated output through a model to summarise it.
 
-`ax for openai/gpt-5-mini golang 1.26.1` does the same with the cutoff taken
+`ax for openai/gpt-5-mini go 1.26.1` does the same with the cutoff taken
 from the knowledge cutoff OpenRouter publishes for that model (its
 `/api/v1/models` listing, cached for a day under the cache directory, refreshed
 with `-refresh`). Model names match the OpenRouter id, canonical slug or
@@ -34,7 +34,7 @@ built-in axiom. Each answer is stored in
 reused until `-refresh` is given; `--offline` skips the agent.
 
 The result contains axioms whose primary clock is after the cutoff and whose
-sub-clock is at or before the subject clock given (so `golang 1.26.1` excludes
+sub-clock is at or before the subject clock given (so `go 1.26.1` excludes
 Go 1.27 facts). Axioms without a sub-clock always apply.
 
 A project can have a `axiomaton.cnf` file, which describes the subjects that are
@@ -58,23 +58,23 @@ line under the heading. The output carries each axiom's clock value (e.g.
 context, where those only add noise. The log keeps both.
 
 Run `ax init` in a project to create its `axiomaton.cnf` (and an empty
-`axiomlog`). Built-in subjects detect themselves: `golang` is listed when a
+`axiomlog`). Built-in subjects detect themselves: `go` is listed when a
 `go.mod` is found in the directory or its parents up to the repository root,
 and every direct requirement in that `go.mod` adds a
-`golang-mod-<module path>` subject (e.g. `golang-mod-golang.org/x/net`);
+`go:<module path>` subject (e.g. `go:golang.org/x/net`);
 indirect requirements are skipped. Detected subjects are written without a
 clock, and a built-in subject named without a clock, in the file or on the
-command line, takes its clock from the project at query time (`golang` uses
-the `go` directive in `go.mod`; `golang-mod-<module>` uses that module's
+command line, takes its clock from the project at query time (`go` uses
+the `go` directive in `go.mod`; `go:<module>` uses that module's
 `require` line), so the file never goes stale. Give an explicit clock to pin a
 version instead. Further built-in subjects can be named as arguments, e.g.
-`ax init golang golang-mod-golang.org/x/text`, and dependencies you do not
+`ax init go go:golang.org/x/text`, and dependencies you do not
 want reported on can simply be deleted from the file.
 
-`golang-mod-<module>` subjects are a built-in *family*: any valid module path
+`go:<module>` subjects are a built-in *family*: any valid module path
 after the prefix is a subject with a `version` clock of kind `semver`, with no
 declaration needed. They ship with no axioms; `ax update
-golang-mod-golang.org/x/net` builds the log for the project (see below), and
+go:golang.org/x/net` builds the log for the project (see below), and
 until then `ax since` warns that nothing is known for the subject.
 
 `axiomaton.cnf` files are written in YAML. Each subject is either the compact
@@ -84,7 +84,7 @@ added for them:
 
 ```yaml
 subjects:
-  - golang                 # clock read from go.mod; pin with [golang, 1.26.1]
+  - go                 # clock read from go.mod; pin with [go, 1.26.1]
   - name: myservice
     clock: [2.3.0]
     shape:
@@ -163,9 +163,9 @@ OpenRouter Decisions API.
 
 The `ax` tool also contains these other commands:
 - `ax for anthropic/claude-sonnet-4.5`
-- `ax add 2026-08-19 golang 1.27.0 "a method declaration may declare its own type parameters."`
-- `ax update golang`
-- `ax update golang-mod-golang.org/x/net`
+- `ax add 2026-08-19 go 1.27.0 "a method declaration may declare its own type parameters."`
+- `ax update go`
+- `ax update go:golang.org/x/net`
 - `ax subjects`
 - `ax init`
 - `ax setup`
@@ -174,8 +174,8 @@ The `ax` tool also contains these other commands:
 repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
 repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
-The update command only works for built-in subjects: `golang`, and
-`golang-mod-<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
+The update command only works for built-in subjects: `go`, and
+`go:<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
 agent is run (using github.com/microsoft/agent-framework-go, running a podman container,
 with tool calls running inside the container via podman exec), to update the axiomlog
 based on go's release notes. For a module subject the agent takes the release
@@ -201,8 +201,8 @@ the suggested correction where there is one; otherwise they are written to
 review, or accepted with `-y`, which takes the suggestion over the original
 when the agent offered one.
 
-The built-in golang log is embedded from `internal/subjects/golang/axiomlog`;
-maintainers refresh it with `ax update golang -l internal/subjects/golang/axiomlog`.
+The built-in go log is embedded from `internal/subjects/golang/axiomlog`;
+maintainers refresh it with `ax update go -l internal/subjects/golang/axiomlog`.
 
 ## Log format
 
@@ -210,7 +210,7 @@ An `axiomlog` is JSON lines; blank lines and `#` comments are ignored. The `id`
 is a content hash and is recomputed on read.
 
 ```json
-{"subject":"golang","time":"2026-08-19T00:00:00Z","clock":{"version":"1.27.0"},"statement":"A method declaration may declare its own type parameters.","source":"https://go.dev/doc/go1.27","by":"agent"}
+{"subject":"go","time":"2026-08-19T00:00:00Z","clock":{"version":"1.27.0"},"statement":"A method declaration may declare its own type parameters.","source":"https://go.dev/doc/go1.27","by":"agent"}
 ```
 
 ## Building

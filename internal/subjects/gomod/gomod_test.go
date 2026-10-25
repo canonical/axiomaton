@@ -42,14 +42,14 @@ require (
 `
 
 func TestLookup(t *testing.T) {
-	s, ok := Lookup("golang-mod-golang.org/x/net")
-	if !ok || s.Module != "golang.org/x/net" || s.Name() != "golang-mod-golang.org/x/net" {
+	s, ok := Lookup("go:golang.org/x/net")
+	if !ok || s.Module != "golang.org/x/net" || s.Name() != "go:golang.org/x/net" {
 		t.Fatalf("lookup: %+v %v", s, ok)
 	}
-	if _, ok := Lookup("golang-mod-github.com/foo/bar/v2"); !ok {
+	if _, ok := Lookup("go:github.com/foo/bar/v2"); !ok {
 		t.Fatal("major version suffix is a valid module path")
 	}
-	for _, bad := range []string{"golang", "golang-mod-", "golang-mod-net", "golang-mod-golang.org/x/net ", "rust-crate-serde", "golang-mod-example.com/a b"} {
+	for _, bad := range []string{"go", "go:", "go:net", "go:golang.org/x/net ", "rust-crate-serde", "go:example.com/a b"} {
 		if _, ok := Lookup(bad); ok {
 			t.Fatalf("%q should not be a module subject", bad)
 		}
@@ -80,7 +80,7 @@ func TestDetect(t *testing.T) {
 			t.Fatalf("source: %s", m.Source)
 		}
 	}
-	want := "golang-mod-github.com/Azure/go-autorest@v14.2.0+incompatible,golang-mod-golang.org/x/mod@v0.42.0,golang-mod-golang.org/x/net@v0.50.0,golang-mod-gopkg.in/yaml.v3@v3.0.1"
+	want := "go:github.com/Azure/go-autorest@v14.2.0+incompatible,go:golang.org/x/mod@v0.42.0,go:golang.org/x/net@v0.50.0,go:gopkg.in/yaml.v3@v3.0.1"
 	if got := strings.Join(names, ","); got != want {
 		t.Fatalf("direct requirements:\n got %s\nwant %s", got, want)
 	}
@@ -92,7 +92,7 @@ func TestDetect(t *testing.T) {
 	}
 
 	// A named member reads its own version, including an indirect one.
-	s, _ := Lookup("golang-mod-golang.org/x/text")
+	s, _ := Lookup("go:golang.org/x/text")
 	clock, src, ok := s.Detect(repo)
 	if !ok || clock[0] != "v0.0.0-20240101120000-abcdef123456" || src != filepath.Join(repo, "go.mod") {
 		t.Fatalf("member detect: %v %s %v", clock, src, ok)

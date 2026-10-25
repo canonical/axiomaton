@@ -31,8 +31,8 @@ func TestParseInterleaved(t *testing.T) {
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	s := fs.Bool("s", false, "")
 	src := fs.String("source", "", "")
-	pos, err := parseInterleaved(fs, []string{"2026-01-01", "golang", "-s", "1.26", "-source", "u"})
-	if err != nil || !*s || *src != "u" || strings.Join(pos, ",") != "2026-01-01,golang,1.26" {
+	pos, err := parseInterleaved(fs, []string{"2026-01-01", "go", "-s", "1.26", "-source", "u"})
+	if err != nil || !*s || *src != "u" || strings.Join(pos, ",") != "2026-01-01,go,1.26" {
 		t.Fatalf("pos=%v s=%v src=%q err=%v", pos, *s, *src, err)
 	}
 	fs = flag.NewFlagSet("t", flag.ContinueOnError)
@@ -43,10 +43,10 @@ func TestParseInterleaved(t *testing.T) {
 	}
 }
 
-// mustSeed returns the embedded golang log.
+// mustSeed returns the embedded go log.
 func mustSeed(t *testing.T) []axiom.Axiom {
 	t.Helper()
-	b, _ := subjects.Lookup("golang")
+	b, _ := subjects.Lookup("go")
 	seed, err := b.Seed()
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestCLI(t *testing.T) {
 	repo := filepath.Join(root, "repo")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	os.MkdirAll(filepath.Join(repo, "sub"), 0o755)
-	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - [golang, 1.26.1]\n  - name: svc\n    clock: [2.3.0]\n    shape: [{name: version, kind: semver}]\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.26.1]\n  - name: svc\n    clock: [2.3.0]\n    shape: [{name: version, kind: semver}]\n"), 0o644)
 
 	exec := func(args ...string) (string, string, error) {
 		var out, errb strings.Builder
@@ -70,11 +70,11 @@ func TestCLI(t *testing.T) {
 		return out.String(), errb.String(), err
 	}
 
-	out, _, err := exec("since", "2025-08-01", "golang", "1.26.1")
+	out, _, err := exec("since", "2025-08-01", "go", "1.26.1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "## golang (version <= 1.26.1)") || !strings.Contains(out, "- **[1.26.0]** ") || strings.Contains(out, "1.27.0") {
+	if !strings.Contains(out, "## go (version <= 1.26.1)") || !strings.Contains(out, "- **[1.26.0]** ") || strings.Contains(out, "1.27.0") {
 		t.Fatalf("since output:\n%s", out)
 	}
 	if strings.Contains(out, "go.dev/doc") || strings.Contains(out, "2026-") || strings.Contains(out, "2025-") {
@@ -83,7 +83,7 @@ func TestCLI(t *testing.T) {
 	// Log order, not hash order, within a release: the 1.25.0 items appear
 	// in the order the seed log lists them.
 	var seedOrder []string
-	for _, a := range axiomlog.Filter(mustSeed(t), "golang") {
+	for _, a := range axiomlog.Filter(mustSeed(t), "go") {
 		if a.Clock["version"] == "1.25.0" {
 			seedOrder = append(seedOrder, a.Statement)
 		}
@@ -99,7 +99,7 @@ func TestCLI(t *testing.T) {
 
 	// svc has no axioms yet, so it is omitted from the default report.
 	out, errOut, err := exec("-v", "since", "2026-01-01")
-	if err != nil || !strings.Contains(out, "## golang") || strings.Contains(out, "## svc") || !strings.Contains(errOut, `nothing to report for subject "svc"; omitted`) {
+	if err != nil || !strings.Contains(out, "## go") || strings.Contains(out, "## svc") || !strings.Contains(errOut, `nothing to report for subject "svc"; omitted`) {
 		t.Fatalf("default subjects: %v\n%s\n%s", err, out, errOut)
 	}
 	out, _, err = exec("since", "2026-01-01", "svc", "2.3.0")
@@ -112,7 +112,7 @@ func TestCLI(t *testing.T) {
 		t.Fatalf("add: %v %s", err, errOut)
 	}
 	out, _, err = exec("since", "2026-01-01")
-	if err != nil || !strings.Contains(out, "## golang") || strings.Contains(out, "## svc") {
+	if err != nil || !strings.Contains(out, "## go") || strings.Contains(out, "## svc") {
 		t.Fatalf("default svc @ 2.3.0 still has nothing to report: %v\n%s", err, out)
 	}
 	data, _ := os.ReadFile(filepath.Join(repo, "axiomlog"))
@@ -140,11 +140,11 @@ func TestCLI(t *testing.T) {
 	}
 
 	out, errOut, err = exec("subjects")
-	if err != nil || !strings.Contains(out, "golang\tshape [version:goversion]") || !strings.Contains(out, "svc\tshape [version:semver]\t1 axiom(s)\tdefault @ 2.3.0") {
+	if err != nil || !strings.Contains(out, "go\tshape [version:goversion]") || !strings.Contains(out, "svc\tshape [version:semver]\t1 axiom(s)\tdefault @ 2.3.0") {
 		t.Fatalf("subjects: %v\n%s\n%s", err, out, errOut)
 	}
 
-	_, errOut, err = exec("since", "2026-01-01", "golang", "-s")
+	_, errOut, err = exec("since", "2026-01-01", "go", "-s")
 	if err == nil || !strings.Contains(err.Error(), "summary") {
 		t.Fatalf("-s without a summary model should fail clearly: %v", err)
 	}
@@ -178,8 +178,8 @@ func TestInit(t *testing.T) {
 	}
 
 	// Explicit subject without a clock reads go.mod even before init.
-	out, _, err := exec(filepath.Join(repo, "pkg"), "since", "2025-08-01", "golang")
-	if err != nil || !strings.Contains(out, "## golang (version <= 1.26.1)") || strings.Contains(out, "1.27.0") {
+	out, _, err := exec(filepath.Join(repo, "pkg"), "since", "2025-08-01", "go")
+	if err != nil || !strings.Contains(out, "## go (version <= 1.26.1)") || strings.Contains(out, "1.27.0") {
 		t.Fatalf("detected clock: %v\n%s", err, out)
 	}
 
@@ -187,14 +187,14 @@ func TestInit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, errOut)
 	}
-	if !strings.Contains(errOut, "golang @ 1.26.1 (from ../go.mod)") || !strings.Contains(errOut, "golang-mod-golang.org/x/net @ v0.50.0 (from ../go.mod)") || !strings.Contains(errOut, "created "+filepath.Join(repo, "pkg", "axiomlog")) || !strings.Contains(errOut, "run `ax setup`") {
+	if !strings.Contains(errOut, "go @ 1.26.1 (from ../go.mod)") || !strings.Contains(errOut, "go:golang.org/x/net @ v0.50.0 (from ../go.mod)") || !strings.Contains(errOut, "created "+filepath.Join(repo, "pkg", "axiomlog")) || !strings.Contains(errOut, "run `ax setup`") {
 		t.Fatalf("init output:\n%s", errOut)
 	}
 	if strings.Contains(errOut, "uuid") {
 		t.Fatalf("indirect dependency listed:\n%s", errOut)
 	}
 	cnf, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf"))
-	if !strings.Contains(string(cnf), "  - golang  # detected: ../go.mod says 1.26.1") || !strings.Contains(string(cnf), "  - golang-mod-golang.org/x/net  # detected: ../go.mod says v0.50.0") {
+	if !strings.Contains(string(cnf), "  - go  # detected: ../go.mod says 1.26.1") || !strings.Contains(string(cnf), "  - go:golang.org/x/net  # detected: ../go.mod says v0.50.0") {
 		t.Fatalf("cnf:\n%s", cnf)
 	}
 	if _, _, err := exec(filepath.Join(repo, "pkg"), "init"); err == nil || !strings.Contains(err.Error(), "already exists") {
@@ -206,54 +206,54 @@ func TestInit(t *testing.T) {
 
 	// Defaults now come from the file, with the clock read from go.mod.
 	out, errOut, err = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01")
-	if err != nil || !strings.Contains(out, "## golang (version <= 1.26.1)") {
+	if err != nil || !strings.Contains(out, "## go (version <= 1.26.1)") {
 		t.Fatalf("default since: %v\n%s", err, out)
 	}
-	if !strings.Contains(errOut, `no axioms known for subject "golang-mod-golang.org/x/net" (run ax update golang-mod-golang.org/x/net)`) {
+	if !strings.Contains(errOut, `no axioms known for subject "go:golang.org/x/net" (run ax update go:golang.org/x/net)`) {
 		t.Fatalf("empty module subject should point at update:\n%s", errOut)
 	}
-	if strings.Contains(out, "golang-mod") {
+	if strings.Contains(out, "go-mod") {
 		t.Fatalf("subject with nothing to report should be omitted:\n%s", out)
 	}
 	out, _, _ = exec(filepath.Join(repo, "pkg"), "subjects")
-	if !strings.Contains(out, "golang\tshape [version:goversion]") || !strings.Contains(out, "default @ 1.26.1 (detected)") || !strings.Contains(out, "golang-mod-golang.org/x/net\tshape [version:semver]\t0 axiom(s)\tdefault @ v0.50.0 (detected)") {
+	if !strings.Contains(out, "go\tshape [version:goversion]") || !strings.Contains(out, "default @ 1.26.1 (detected)") || !strings.Contains(out, "go:golang.org/x/net\tshape [version:semver]\t0 axiom(s)\tdefault @ v0.50.0 (detected)") {
 		t.Fatalf("subjects:\n%s", out)
 	}
 
 	// Module subjects take the built-in semver shape without declaring one,
 	// and the detected clock bounds the report.
-	if _, errOut, err = exec(filepath.Join(repo, "pkg"), "add", "2026-02-01", "golang-mod-golang.org/x/net", "v0.49.0", "net/http2 gained a Transport.MaxReadFrameSize field."); err != nil || !strings.Contains(errOut, "added") {
+	if _, errOut, err = exec(filepath.Join(repo, "pkg"), "add", "2026-02-01", "go:golang.org/x/net", "v0.49.0", "net/http2 gained a Transport.MaxReadFrameSize field."); err != nil || !strings.Contains(errOut, "added") {
 		t.Fatalf("add module axiom: %v %s", err, errOut)
 	}
-	if _, _, err = exec(filepath.Join(repo, "pkg"), "add", "2026-03-01", "golang-mod-golang.org/x/net", "0.51.0", "future change"); err != nil {
+	if _, _, err = exec(filepath.Join(repo, "pkg"), "add", "2026-03-01", "go:golang.org/x/net", "0.51.0", "future change"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = exec(filepath.Join(repo, "pkg"), "add", "2026-03-01", "golang-mod-golang.org/x/net", "banana", "x"); err == nil || !strings.Contains(err.Error(), "not a semantic version") {
+	if _, _, err = exec(filepath.Join(repo, "pkg"), "add", "2026-03-01", "go:golang.org/x/net", "banana", "x"); err == nil || !strings.Contains(err.Error(), "not a semantic version") {
 		t.Fatalf("bad module clock: %v", err)
 	}
 	out, _, err = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01")
-	if err != nil || !strings.Contains(out, "## golang-mod-golang.org/x/net (version <= 0.50.0)") || !strings.Contains(out, "MaxReadFrameSize") || strings.Contains(out, "future change") {
+	if err != nil || !strings.Contains(out, "## go:golang.org/x/net (version <= 0.50.0)") || !strings.Contains(out, "MaxReadFrameSize") || strings.Contains(out, "future change") {
 		t.Fatalf("module since: %v\n%s", err, out)
 	}
-	out, _, err = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01", "golang-mod-golang.org/x/net", "0.51.0")
+	out, _, err = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01", "go:golang.org/x/net", "0.51.0")
 	if err != nil || !strings.Contains(out, "future change") {
 		t.Fatalf("explicit module clock: %v\n%s", err, out)
 	}
-	if _, _, err = exec(filepath.Join(repo, "pkg"), "update", "golang-mod-nodots"); err == nil || !strings.Contains(err.Error(), "golang-mod-<module path>") {
+	if _, _, err = exec(filepath.Join(repo, "pkg"), "update", "go:nodots"); err == nil || !strings.Contains(err.Error(), "go:<module path>") {
 		t.Fatalf("update with a bad module path: %v", err)
 	}
 
 	// Bumping go.mod moves the clock without touching the config.
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n\ngo 1.27\n"), 0o644)
 	out, _, _ = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01")
-	if !strings.Contains(out, "## golang (version <= 1.27.0)") || !strings.Contains(out, "1.27.0") {
+	if !strings.Contains(out, "## go (version <= 1.27.0)") || !strings.Contains(out, "1.27.0") {
 		t.Fatalf("bumped go.mod:\n%s", out)
 	}
 
 	// A pinned clock in the file wins over detection.
-	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte("subjects:\n  - [golang, 1.25.0]\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.25.0]\n"), 0o644)
 	out, _, _ = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01")
-	if !strings.Contains(out, "## golang (version <= 1.25.0)") {
+	if !strings.Contains(out, "## go (version <= 1.25.0)") {
 		t.Fatalf("pinned:\n%s", out)
 	}
 
@@ -264,12 +264,12 @@ func TestInit(t *testing.T) {
 	if err != nil || !strings.Contains(errOut, "no built-in subject detected") {
 		t.Fatalf("empty init: %v %s", err, errOut)
 	}
-	_, errOut, err = exec(other, "init", "-force", "golang")
-	if err != nil || !strings.Contains(errOut, "ax:   golang") {
+	_, errOut, err = exec(other, "init", "-force", "go")
+	if err != nil || !strings.Contains(errOut, "ax:   go") {
 		t.Fatalf("requested init: %v %s", err, errOut)
 	}
 	out, _, err = exec(other, "since", "2025-08-01")
-	if err != nil || !strings.Contains(out, "## golang\n") {
+	if err != nil || !strings.Contains(out, "## go\n") {
 		t.Fatalf("unclocked default should be unconstrained: %v\n%s", err, out)
 	}
 }

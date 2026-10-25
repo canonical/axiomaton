@@ -14,7 +14,7 @@
 
 // Package gomod is the built-in subject family for Go module dependencies.
 // Every module a project requires directly in its go.mod gets a subject
-// named golang-mod-<module path>, e.g. golang-mod-golang.org/x/net, clocked
+// named go:<module path>, e.g. go:golang.org/x/net, clocked
 // by the module version in use.
 package gomod
 
@@ -30,7 +30,7 @@ import (
 )
 
 // Prefix starts the name of every subject in the family.
-const Prefix = "golang-mod-"
+const Prefix = "go:"
 
 // Pattern describes the family's subject names in help text.
 const Pattern = Prefix + "<module path>"
@@ -42,7 +42,7 @@ type Subject struct {
 }
 
 // Lookup returns the subject for a family name such as
-// golang-mod-golang.org/x/net. Names outside the family, or whose module
+// go:golang.org/x/net. Names outside the family, or whose module
 // path is not valid, are rejected.
 func Lookup(name string) (Subject, bool) {
 	if !strings.HasPrefix(name, Prefix) {

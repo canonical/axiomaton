@@ -35,7 +35,7 @@ var GlobalEpoch = time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
 type Axiom struct {
 	// ID is a content hash of the subject, clock and statement.
 	ID string `json:"id"`
-	// Subject names the subject this axiom belongs to, e.g. "golang".
+	// Subject names the subject this axiom belongs to, e.g. "go".
 	Subject string `json:"subject"`
 	// Time is the primary clock: the UTC instant from which the statement holds.
 	Time time.Time `json:"time"`

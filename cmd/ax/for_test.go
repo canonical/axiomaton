@@ -104,7 +104,7 @@ func TestForCommand(t *testing.T) {
 	repo := filepath.Join(root, "repo")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module m\n\ngo 1.26.0\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - golang\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - go\n"), 0o644)
 
 	// No models are configured, so queries are deterministic without
 	// --offline; the global --offline flag is used below to prove the
@@ -124,7 +124,7 @@ func TestForCommand(t *testing.T) {
 	if !strings.Contains(errOut, "ax: openai/gpt-5-mini (OpenAI: GPT-5 Mini) knowledge cutoff 2024-05-31") {
 		t.Fatalf("stderr:\n%s", errOut)
 	}
-	if !strings.Contains(out, "# Axiom changes\n") || strings.Contains(out, "2024-05-31") || !strings.Contains(out, "## golang (version <= 1.26.0)") || !strings.Contains(out, "1.25.0") || strings.Contains(out, "1.27.0") {
+	if !strings.Contains(out, "# Axiom changes\n") || strings.Contains(out, "2024-05-31") || !strings.Contains(out, "## go (version <= 1.26.0)") || !strings.Contains(out, "1.25.0") || strings.Contains(out, "1.27.0") {
 		t.Fatalf("out:\n%s", out)
 	}
 	if fetches != 1 {
@@ -132,7 +132,7 @@ func TestForCommand(t *testing.T) {
 	}
 
 	// Later calls use the cache, also under --offline; -refresh fetches again.
-	if _, _, err := exec("for", "anthropic/claude-sonnet-4.5", "golang", "1.25.0"); err != nil || fetches != 1 {
+	if _, _, err := exec("for", "anthropic/claude-sonnet-4.5", "go", "1.25.0"); err != nil || fetches != 1 {
 		t.Fatalf("cached: %v fetches=%d", err, fetches)
 	}
 	if _, _, err := exec("--offline", "for", "anthropic/claude-sonnet-4.5"); err != nil || fetches != 1 {

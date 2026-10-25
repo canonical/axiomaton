@@ -59,7 +59,7 @@ type Detected struct {
 type Family interface {
 	// Prefix starts every member's name.
 	Prefix() string
-	// Pattern describes member names in help text, e.g. golang-mod-<module>.
+	// Pattern describes member names in help text, e.g. go:<module>.
 	Pattern() string
 	// Lookup builds the member with the given full name.
 	Lookup(name string) (Builtin, bool)
@@ -110,7 +110,7 @@ func (gomodFamily) Detect(dir string) []Detected {
 }
 
 // Lookup returns a built-in subject by name, including family members such
-// as golang-mod-golang.org/x/net.
+// as go:golang.org/x/net.
 func Lookup(name string) (Builtin, bool) {
 	if b, ok := all[name]; ok {
 		return b, true

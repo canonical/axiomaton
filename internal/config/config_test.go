@@ -89,7 +89,7 @@ func TestLoadProject(t *testing.T) {
 	path := filepath.Join(dir, ProjectFile)
 	os.WriteFile(path, []byte(`
 subjects:
-  - [golang, 1.26.1]
+  - [go, 1.26.1]
   - name: svc
     clock: [2.3.0]
     shape:
@@ -103,7 +103,7 @@ shapes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Subjects) != 3 || p.Subjects[0].Name != "golang" || p.Subjects[0].Clock[0] != "1.26.1" {
+	if len(p.Subjects) != 3 || p.Subjects[0].Name != "go" || p.Subjects[0].Clock[0] != "1.26.1" {
 		t.Fatalf("subjects: %+v", p.Subjects)
 	}
 	if p.Subjects[2].Name != "plain" || len(p.Subjects[2].Clock) != 0 {

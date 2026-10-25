@@ -29,7 +29,7 @@ import (
 )
 
 // Name is the subject name.
-const Name = "golang"
+const Name = "go"
 
 //go:embed axiomlog
 var seed string
@@ -44,7 +44,7 @@ func (Subject) Shape() []axiom.ClockShape {
 }
 
 func (Subject) Seed() ([]axiom.Axiom, error) {
-	return axiomlog.Read(strings.NewReader(seed), "builtin:golang")
+	return axiomlog.Read(strings.NewReader(seed), "builtin:go")
 }
 
 // Detect reports whether dir is part of a Go module by looking for a go.mod
