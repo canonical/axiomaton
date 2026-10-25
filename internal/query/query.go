@@ -81,6 +81,12 @@ type Result struct {
 	Notes []string
 }
 
+// Reportable reports whether the result has something for a reader: at
+// least one changed or added axiom. Restated axioms alone are not reported.
+func (r Result) Reportable() bool {
+	return len(r.Changed) > 0 || len(r.Added) > 0
+}
+
 // Empty reports whether nothing changed.
 func (r Result) Empty() bool {
 	return len(r.Changed) == 0 && len(r.Added) == 0 && len(r.Restated) == 0

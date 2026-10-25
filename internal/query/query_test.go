@@ -16,6 +16,7 @@ package query
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -110,9 +111,17 @@ func TestDeterministicOnly(t *testing.T) {
 	if r.Added[0].Axiom.Clock["version"] != "1.22" || r.Added[2].Axiom.Clock["version"] != "1.26" {
 		t.Fatalf("order/filter wrong: %+v", r.Added)
 	}
-	md := Render(req.Since, []Result{r})
+	md := Render([]Result{r})
 	if !strings.Contains(md, "## golang (version <= 1.26.1)") || !strings.Contains(md, "### Added") || !strings.Contains(md, "resolution skipped") {
 		t.Fatalf("markdown:\n%s", md)
+	}
+	if !strings.Contains(md, "- **[1.22]** ") || strings.Contains(md, "source") || dateLike.MatchString(md) {
+		t.Fatalf("output must carry clocks but no dates or sources:\n%s", md)
+	}
+	// An axiom without a clock is a bare statement.
+	plain := Result{Request: Request{Subject: axiom.Subject{Name: "notes"}}, Added: []Entry{{Axiom: axiom.Axiom{Statement: "just a fact", Source: "https://x"}}}}
+	if md := Render([]Result{plain}); !strings.Contains(md, "\n- just a fact\n") || strings.Contains(md, "https://x") {
+		t.Fatalf("unclocked entry:\n%s", md)
 	}
 	if strings.Contains(md, "1.27") || strings.Contains(md, "rust") {
 		t.Fatalf("leaked excluded axioms:\n%s", md)
@@ -151,8 +160,8 @@ func TestResolution(t *testing.T) {
 			t.Fatalf("synctest should have had no candidates: %+v", c)
 		}
 	}
-	md := Render(req.Since, []Result{r})
-	for _, want := range []string{"### Changed", "Supersedes [2012-03-28 1.0]", "### Added", "### Restated", "1 changed, 2 added, 1 restated"} {
+	md := Render([]Result{r})
+	for _, want := range []string{"### Changed", "Supersedes [1.0] ", "### Added", "### Restated", "1 changed, 2 added, 1 restated"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("missing %q in:\n%s", want, md)
 		}
@@ -193,13 +202,39 @@ func TestThreshold(t *testing.T) {
 	}
 }
 
+var dateLike = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
+
 func TestNoFresh(t *testing.T) {
 	req := Request{Since: day("2030-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}}
 	r, _ := Evaluate(context.Background(), corpus(), req, Resolver{})
 	if !r.Empty() || r.Prior != 7 {
 		t.Fatalf("%+v", r)
 	}
-	if md := Render(req.Since, []Result{r}); !strings.Contains(md, "No changes") {
+	if md := Render([]Result{r}); !strings.Contains(md, "No changes for golang.") || strings.Contains(md, "## golang") {
 		t.Fatal(md)
+	}
+}
+
+func TestRenderOmitsQuietSubjects(t *testing.T) {
+	busy := Request{Since: day("2024-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
+	rb, _ := Evaluate(context.Background(), corpus(), busy, Resolver{})
+	quiet := Request{Since: day("2030-01-01"), Subject: axiom.Subject{Name: "golang", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
+	rq, _ := Evaluate(context.Background(), corpus(), quiet, Resolver{})
+	rq.Subject.Name = "quiet"
+	none := Result{Request: Request{Subject: axiom.Subject{Name: "empty"}}}
+	restatedOnly := Result{Request: Request{Subject: axiom.Subject{Name: "echo"}}, Restated: []Entry{{}}}
+
+	md := Render([]Result{rq, rb, none, restatedOnly})
+	if !strings.Contains(md, "## golang (version <= 1.26.1)") || !strings.Contains(md, "### Added") {
+		t.Fatalf("busy subject missing:\n%s", md)
+	}
+	for _, absent := range []string{"## quiet", "## empty", "## echo", "No changes"} {
+		if strings.Contains(md, absent) {
+			t.Fatalf("%q should be omitted:\n%s", absent, md)
+		}
+	}
+	md = Render([]Result{rq, none})
+	if md != "# Axiom changes\n\nNo changes for quiet (version <= 1.26.1), empty.\n" {
+		t.Fatalf("all quiet:\n%s", md)
 	}
 }

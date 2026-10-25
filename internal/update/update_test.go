@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,26 +29,63 @@ import (
 	"github.com/canonical/axiomaton/internal/subjects"
 )
 
-type fakeContainer struct{ closed bool }
+type fakeContainer struct {
+	rt     *fakeRuntime
+	closed bool
+}
 
 func (f *fakeContainer) Exec(_ context.Context, cmd string, _ time.Duration) (ExecResult, error) {
 	return ExecResult{Stdout: "ran: " + cmd}, nil
 }
-func (f *fakeContainer) Close(context.Context) error { f.closed = true; return nil }
 
-type fakeRuntime struct{ started []*fakeContainer }
+func (f *fakeContainer) Close(context.Context) error {
+	if f.rt.hold != nil {
+		<-f.rt.hold
+	}
+	f.rt.mu.Lock()
+	f.closed = true
+	f.rt.running--
+	f.rt.mu.Unlock()
+	return nil
+}
+
+type fakeRuntime struct {
+	mu      sync.Mutex
+	started []*fakeContainer
+	// running counts live containers; peak is the most seen at once.
+	running, peak int
+	// hold keeps each container open until released, to observe overlap.
+	hold chan struct{}
+}
 
 func (f *fakeRuntime) Start(context.Context) (Container, error) {
-	c := &fakeContainer{}
+	c := &fakeContainer{rt: f}
+	f.mu.Lock()
 	f.started = append(f.started, c)
+	f.running++
+	f.peak = max(f.peak, f.running)
+	f.mu.Unlock()
 	return c, nil
+}
+
+func (f *fakeRuntime) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.started)
 }
 
 // fakeAgent drives tools directly: the update run proposes two axioms, the
 // confirm run confirms statements containing "true".
 type fakeAgent struct {
 	t    *testing.T
+	mu   sync.Mutex
 	runs int
+}
+
+func (f *fakeAgent) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.runs
 }
 
 func call(t *testing.T, tools []tool.Tool, name string, in any) string {
@@ -70,7 +108,9 @@ func call(t *testing.T, tools []tool.Tool, name string, in any) string {
 }
 
 func (f *fakeAgent) Run(_ context.Context, instructions, task string, tools []tool.Tool, out any) (string, error) {
+	f.mu.Lock()
 	f.runs++
+	f.mu.Unlock()
 	if out == nil {
 		// Update agent.
 		if !strings.Contains(instructions, "append-only log") || !strings.Contains(task, "Your task") {
@@ -133,11 +173,11 @@ func TestUpdaterRun(t *testing.T) {
 	}
 	// One update run, four confirmations and two re-confirmations of
 	// suggested corrections.
-	if summary != "covered 1.28.0" || len(props) != 4 || ag.runs != 7 {
-		t.Fatalf("props=%d summary=%q runs=%d", len(props), summary, ag.runs)
+	if summary != "covered 1.28.0" || len(props) != 4 || ag.count() != 7 {
+		t.Fatalf("props=%d summary=%q runs=%d", len(props), summary, ag.count())
 	}
-	if len(rt.started) != 7 {
-		t.Fatalf("expected a fresh container per agent, got %d", len(rt.started))
+	if rt.count() != 7 || rt.peak != 1 {
+		t.Fatalf("expected a fresh container per agent, one at a time, got %d (peak %d)", rt.count(), rt.peak)
 	}
 	for _, c := range rt.started {
 		if !c.closed {
@@ -208,9 +248,77 @@ func TestCorrectionAlreadyKnown(t *testing.T) {
 			t.Fatalf("known correction should be dropped: %+v", p)
 		}
 	}
-	if len(props) != 3 || ag.runs != 6 {
-		t.Fatalf("props=%d runs=%d", len(props), ag.runs)
+	if len(props) != 3 || ag.count() != 6 {
+		t.Fatalf("props=%d runs=%d", len(props), ag.count())
 	}
+}
+
+func TestParallelConfirmation(t *testing.T) {
+	// Containers block in Close until released, so with Parallel 3 the
+	// first three confirmations must all be open at once; results come
+	// back in proposal order regardless of completion order.
+	rt := &fakeRuntime{hold: make(chan struct{})}
+	ag := newFakeAgent(t)
+	b, _ := subjects.Lookup("golang")
+	u := &Updater{Subject: b, Runtime: rt, Agent: ag, ExecTimeout: time.Second, Parallel: 3, Log: t.Logf}
+	done := make(chan struct{})
+	var props []Proposal
+	var err error
+	go func() {
+		defer close(done)
+		props, _, err = u.Run(context.Background(), nil)
+	}()
+	// The update agent's container, then three confirmations.
+	for i := 0; i < 4; i++ {
+		rt.hold <- struct{}{}
+	}
+	for {
+		rt.mu.Lock()
+		peak := rt.peak
+		rt.mu.Unlock()
+		if peak >= 3 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(rt.hold)
+	<-done
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.peak > 3 {
+		t.Fatalf("more than 3 containers at once: %d", rt.peak)
+	}
+	var order []string
+	for _, p := range props {
+		order = append(order, p.Axiom.Statement)
+	}
+	if got := strings.Join(order, "|"); got != "this is true|this is dubious|this is exactly true|this is slightly off" {
+		t.Fatalf("order: %s", got)
+	}
+	if rt.count() != 7 {
+		t.Fatalf("containers: %d", rt.count())
+	}
+
+	// Cancellation stops the fan-out and reports the context error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rt2 := &fakeRuntime{}
+	u2 := &Updater{Subject: b, Runtime: rt2, Agent: &cancelAgent{inner: newFakeAgent(t)}, ExecTimeout: time.Second, Parallel: 2, Log: t.Logf}
+	if _, _, err := u2.Run(ctx, nil); err == nil {
+		t.Fatal("cancelled run should fail")
+	}
+}
+
+// cancelAgent lets the update run through but fails confirmations with the
+// context's error, as a real agent would once cancelled.
+type cancelAgent struct{ inner *fakeAgent }
+
+func (c *cancelAgent) Run(ctx context.Context, instructions, task string, tools []tool.Tool, out any) (string, error) {
+	if out == nil {
+		return c.inner.Run(ctx, instructions, task, tools, out)
+	}
+	return "", ctx.Err()
 }
 
 func TestTruncate(t *testing.T) {

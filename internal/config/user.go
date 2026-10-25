@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -76,6 +77,9 @@ type Update struct {
 	MaxIterations int    `yaml:"max_iterations"`
 	// ExecTimeout bounds each tool command inside the container, in seconds.
 	ExecTimeout int `yaml:"exec_timeout"`
+	// Confirmations is how many confirmation agents (each in its own
+	// container) run at once.
+	Confirmations int `yaml:"confirmations"`
 }
 
 // Retry tunes how model requests are retried after rate limits and
@@ -107,6 +111,12 @@ type User struct {
 	Path string `yaml:"-"`
 }
 
+// DefaultConfirmations is half the CPUs, at least one: each confirmation
+// runs a container and an agent, and the model endpoint is the other limit.
+func DefaultConfirmations() int {
+	return max(1, runtime.NumCPU()/2)
+}
+
 // DefaultUser returns the built in defaults.
 func DefaultUser() User {
 	return User{
@@ -131,6 +141,7 @@ func DefaultUser() User {
 			Image:         "public.ecr.aws/ubuntu/ubuntu:latest",
 			MaxIterations: 80,
 			ExecTimeout:   300,
+			Confirmations: DefaultConfirmations(),
 		},
 	}
 }
@@ -203,6 +214,9 @@ func (u *User) merge(o User) {
 	}
 	if o.Update.MaxIterations > 0 {
 		u.Update.MaxIterations = o.Update.MaxIterations
+	}
+	if o.Update.Confirmations > 0 {
+		u.Update.Confirmations = o.Update.Confirmations
 	}
 	if o.Update.ExecTimeout > 0 {
 		u.Update.ExecTimeout = o.Update.ExecTimeout

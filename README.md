@@ -50,6 +50,12 @@ write target outside of any repository.
 
 When `ax since 2025-08-01` is run, the default subjects are returned. When no
 default subjects are declared, nothing is printed and a warning goes to stderr.
+A subject with nothing to report (no axiom changed or added since the cutoff
+within its clock) is left out of the output, and `-v` says so on stderr; when
+that is true of every subject the output is a single "No changes for ..."
+line under the heading. The output carries each axiom's clock value (e.g.
+`[1.26.0]`) but no dates and no sources: it is written for a model's
+context, where those only add noise. The log keeps both.
 
 Run `ax init` in a project to create its `axiomaton.cnf` (and an empty
 `axiomlog`). Built-in subjects detect themselves: `golang` is listed when a
@@ -144,6 +150,7 @@ update:
   image: public.ecr.aws/ubuntu/ubuntu:latest
   max_iterations: 80                # tool calls per agent run
   exec_timeout: 300                 # seconds per command in the container
+  confirmations: 4                  # confirmation agents at once (default: half the CPUs)
 ```
 
 Requests that fail with 429, 5xx or a dropped connection are retried with
@@ -177,7 +184,10 @@ from the module's release notes, an API comparison between tags (apidiff) and
 the commit log, starting from the newest release the log already covers, or,
 for an empty log, from releases published since the global epoch
 (2023-08-01). Then after the agent has concluded, for each individual
-axiom added, a new agent, with a new container, is asked to confirm, it. Only axioms
+axiom added, a new agent, with a new container, is asked to confirm, it; these
+confirmations run several at a time (`update.confirmations` in `ax.cnf`, half
+the CPUs by default, or `-j n` on the command line), each in its own
+container, and the results keep the proposal order. Only axioms
 that are confirmed are added automatically, axioms that are not confirmed require
 user input. A confirmation agent that rejects a statement says which kind of
 rejection it is: an *inaccurate* statement (wrong release, identifier or scope,

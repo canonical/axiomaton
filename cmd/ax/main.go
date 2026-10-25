@@ -312,9 +312,12 @@ func (a *app) report(ctx context.Context, since time.Time, args []string, summar
 		if err != nil {
 			return err
 		}
+		if !r.Reportable() {
+			a.logf("nothing to report for subject %q; omitted", t.Name)
+		}
 		results = append(results, r)
 	}
-	md := query.Render(since, results)
+	md := query.Render(results)
 	if summarise {
 		ep, err := e.cfg.Resolve(config.RoleSummary)
 		if err != nil {
@@ -459,8 +462,9 @@ func (a *app) update(ctx context.Context, args []string) error {
 	logPath := fs.String("l", "", "axiomlog file to append to (default: nearest writeable log)")
 	image := fs.String("image", "", "container image for the agents (default from ax.cnf)")
 	yes := fs.Bool("y", false, "accept unconfirmed axioms without asking")
+	jobs := fs.Int("j", 0, "confirmation agents to run at once (default from ax.cnf: half the CPUs)")
 	fs.Usage = func() {
-		fmt.Fprintln(a.stderr, "usage: ax update [-l axiomlog] [-image ref] [-y] <subject>")
+		fmt.Fprintln(a.stderr, "usage: ax update [-l axiomlog] [-image ref] [-j n] [-y] <subject>")
 		fs.PrintDefaults()
 	}
 	rest, err := parseInterleaved(fs, args)
@@ -497,7 +501,11 @@ func (a *app) update(ctx context.Context, args []string) error {
 		Runtime:     rt,
 		Agent:       ag,
 		ExecTimeout: time.Duration(e.cfg.Update.ExecTimeout) * time.Second,
+		Parallel:    e.cfg.Update.Confirmations,
 		Log:         progress,
+	}
+	if *jobs > 0 {
+		u.Parallel = *jobs
 	}
 	existing := axiomlog.Filter(e.axioms, builtin.Name())
 	axiom.Sort(existing, builtin.Shape())

@@ -124,7 +124,7 @@ func TestForCommand(t *testing.T) {
 	if !strings.Contains(errOut, "ax: openai/gpt-5-mini (OpenAI: GPT-5 Mini) knowledge cutoff 2024-05-31") {
 		t.Fatalf("stderr:\n%s", errOut)
 	}
-	if !strings.Contains(out, "# Axiom changes since 2024-05-31") || !strings.Contains(out, "## golang (version <= 1.26.0)") || !strings.Contains(out, "1.25.0") || strings.Contains(out, "1.27.0") {
+	if !strings.Contains(out, "# Axiom changes\n") || strings.Contains(out, "2024-05-31") || !strings.Contains(out, "## golang (version <= 1.26.0)") || !strings.Contains(out, "1.25.0") || strings.Contains(out, "1.27.0") {
 		t.Fatalf("out:\n%s", out)
 	}
 	if fetches != 1 {
@@ -147,7 +147,7 @@ func TestForCommand(t *testing.T) {
 	// store it, and reuse the stored value next time.
 	storePath := filepath.Join(root, "data", "axiomaton", "cutoffs.json")
 	out, errOut, err = exec("for", "mystery/model")
-	if err != nil || !strings.Contains(errOut, "not searching for the cutoff with an agent") || !strings.Contains(errOut, "estimated as 2024-07-25 (OpenRouter release date 2025-10-01 minus 433 days, the 90th percentile release-to-cutoff gap across 2 OpenRouter models, seen for openai/gpt-5-mini)") || !strings.Contains(out, "since 2024-07-25") {
+	if err != nil || !strings.Contains(errOut, "not searching for the cutoff with an agent") || !strings.Contains(errOut, "estimated as 2024-07-25 (OpenRouter release date 2025-10-01 minus 433 days, the 90th percentile release-to-cutoff gap across 2 OpenRouter models, seen for openai/gpt-5-mini)") || !strings.Contains(out, "# Axiom changes\n") || strings.Contains(out, "2024-07-25") {
 		t.Fatalf("estimate: %v\n%s\n%s", err, errOut, out)
 	}
 	if data, _ := os.ReadFile(storePath); !strings.Contains(string(data), `"method": "estimate"`) {
@@ -159,7 +159,7 @@ func TestForCommand(t *testing.T) {
 	}
 	// Neither cutoff nor release date: the global epoch, stored like the rest.
 	out, errOut, err = exec("for", "mystery/undated")
-	if err != nil || !strings.Contains(errOut, "defaulted as 2023-08-01 (no release date on OpenRouter; global epoch)") || !strings.Contains(out, "since 2023-08-01") {
+	if err != nil || !strings.Contains(errOut, "defaulted as 2023-08-01 (no release date on OpenRouter; global epoch)") || !strings.Contains(out, "# Axiom changes\n") || strings.Contains(out, "2023-08-01") {
 		t.Fatalf("undated: %v\n%s\n%s", err, errOut, out)
 	}
 	if data, _ := os.ReadFile(storePath); !strings.Contains(string(data), `"method": "epoch"`) {

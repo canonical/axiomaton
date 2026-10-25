@@ -103,6 +103,7 @@ func Render(u User, now time.Time) []byte {
 	fmt.Fprintf(&b, "  image: %s\n", yamlScalar(u.Update.Image))
 	fmt.Fprintf(&b, "  max_iterations: %d  # tool calls per agent run\n", u.Update.MaxIterations)
 	fmt.Fprintf(&b, "  exec_timeout: %d  # seconds per command in the container\n", u.Update.ExecTimeout)
+	fmt.Fprintf(&b, "  confirmations: %d  # confirmation agents run at once (default: half the CPUs)\n", u.Update.Confirmations)
 	return b.Bytes()
 }
 

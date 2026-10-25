@@ -17,47 +17,64 @@ package query
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/canonical/axiomaton/internal/axiom"
 )
 
-// Render produces deterministic Markdown for one or more results.
-func Render(since time.Time, results []Result) string {
+// Render produces deterministic Markdown for one or more results. Subjects
+// with nothing to report are left out; when that is every subject, a single
+// line says so. Dates and sources are deliberately absent: the output is
+// meant for a model's context, where the cutoff and provenance only add
+// noise, and the clock value alone places each statement.
+func Render(results []Result) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Axiom changes since %s\n\n", since.Format("2006-01-02"))
+	b.WriteString("# Axiom changes\n\n")
+	var shown, quiet []Result
+	for _, r := range results {
+		if r.Reportable() {
+			shown = append(shown, r)
+		} else {
+			quiet = append(quiet, r)
+		}
+	}
+	if len(shown) == 0 {
+		names := make([]string, len(quiet))
+		for i, r := range quiet {
+			names[i] = r.Subject.Name + clockSuffix(r)
+		}
+		fmt.Fprintf(&b, "No changes for %s.\n", strings.Join(names, ", "))
+		return b.String()
+	}
 	fmt.Fprintf(&b, "Each item below is a statement that became true after the cutoff. "+
 		"Where a newer statement supersedes an older one, the older statement should no longer be relied on.\n")
-	for _, r := range results {
+	for _, r := range shown {
 		b.WriteString("\n")
 		renderResult(&b, r)
 	}
 	return b.String()
 }
 
+// clockSuffix is the " (version <= 1.26.1)" part of a subject heading, or
+// "" when the request had no clock.
+func clockSuffix(r Result) string {
+	if len(r.Clock) == 0 {
+		return ""
+	}
+	var dims []string
+	for _, d := range r.Subject.Shape {
+		if v, ok := r.Clock[d.Name]; ok {
+			dims = append(dims, fmt.Sprintf("%s <= %s", d.Name, v))
+		}
+	}
+	if len(dims) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(dims, ", ") + ")"
+}
+
 func renderResult(b *strings.Builder, r Result) {
 	shape := r.Subject.Shape
-	fmt.Fprintf(b, "## %s", r.Subject.Name)
-	if len(r.Clock) > 0 {
-		var dims []string
-		for _, d := range shape {
-			if v, ok := r.Clock[d.Name]; ok {
-				dims = append(dims, fmt.Sprintf("%s <= %s", d.Name, v))
-			}
-		}
-		if len(dims) > 0 {
-			fmt.Fprintf(b, " (%s)", strings.Join(dims, ", "))
-		}
-	}
-	b.WriteString("\n\n")
-
-	if r.Empty() {
-		fmt.Fprintf(b, "No changes. %d axiom(s) were already true at the cutoff.\n", r.Prior)
-		for _, n := range r.Notes {
-			fmt.Fprintf(b, "\n_%s_\n", n)
-		}
-		return
-	}
+	fmt.Fprintf(b, "## %s%s\n\n", r.Subject.Name, clockSuffix(r))
 	fmt.Fprintf(b, "%d changed, %d added, %d restated; %d axiom(s) were already true at the cutoff.\n",
 		len(r.Changed), len(r.Added), len(r.Restated), r.Prior)
 	for _, n := range r.Notes {
@@ -69,7 +86,7 @@ func renderResult(b *strings.Builder, r Result) {
 		for _, e := range r.Changed {
 			renderEntry(b, e, shape)
 			for _, old := range e.Supersedes {
-				fmt.Fprintf(b, "  - Supersedes [%s]: %s\n", clockLabel(old, shape), oneLine(old.Statement))
+				fmt.Fprintf(b, "  - Supersedes%s %s\n", label(old, shape), oneLine(old.Statement))
 			}
 		}
 	}
@@ -85,11 +102,21 @@ func renderResult(b *strings.Builder, r Result) {
 }
 
 func renderEntry(b *strings.Builder, e Entry, shape []axiom.ClockShape) {
-	fmt.Fprintf(b, "- **[%s]** %s", clockLabel(e.Axiom, shape), oneLine(e.Axiom.Statement))
-	if e.Axiom.Source != "" {
-		fmt.Fprintf(b, " (source: %s)", e.Axiom.Source)
+	if l := label(e.Axiom, shape); l != "" {
+		fmt.Fprintf(b, "- **%s** %s\n", strings.TrimSpace(l), oneLine(e.Axiom.Statement))
+		return
 	}
-	b.WriteString("\n")
+	fmt.Fprintf(b, "- %s\n", oneLine(e.Axiom.Statement))
+}
+
+// label is the axiom's clock in brackets with a leading space, e.g.
+// " [1.26.0]", or "" for an axiom without a clock.
+func label(a axiom.Axiom, shape []axiom.ClockShape) string {
+	values := axiom.ClockValues(a.Clock, shape)
+	if len(values) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(values, " ") + "]"
 }
 
 func oneLine(s string) string {

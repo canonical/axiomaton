@@ -74,8 +74,11 @@ func TestCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "## golang (version <= 1.26.1)") || !strings.Contains(out, "1.26.0]**") || strings.Contains(out, "1.27.0") {
+	if !strings.Contains(out, "## golang (version <= 1.26.1)") || !strings.Contains(out, "- **[1.26.0]** ") || strings.Contains(out, "1.27.0") {
 		t.Fatalf("since output:\n%s", out)
+	}
+	if strings.Contains(out, "go.dev/doc") || strings.Contains(out, "2026-") || strings.Contains(out, "2025-") {
+		t.Fatalf("sources and dates must not be rendered:\n%s", out)
 	}
 	// Log order, not hash order, within a release: the 1.25.0 items appear
 	// in the order the seed log lists them.
@@ -94,14 +97,23 @@ func TestCLI(t *testing.T) {
 		}
 	}
 
-	out, _, err = exec("since", "2026-01-01")
-	if err != nil || !strings.Contains(out, "## golang") || !strings.Contains(out, "## svc") {
-		t.Fatalf("default subjects: %v\n%s", err, out)
+	// svc has no axioms yet, so it is omitted from the default report.
+	out, errOut, err := exec("-v", "since", "2026-01-01")
+	if err != nil || !strings.Contains(out, "## golang") || strings.Contains(out, "## svc") || !strings.Contains(errOut, `nothing to report for subject "svc"; omitted`) {
+		t.Fatalf("default subjects: %v\n%s\n%s", err, out, errOut)
+	}
+	out, _, err = exec("since", "2026-01-01", "svc", "2.3.0")
+	if err != nil || out != "# Axiom changes\n\nNo changes for svc (version <= 2.3.0).\n" {
+		t.Fatalf("quiet subject alone: %v\n%s", err, out)
 	}
 
-	_, errOut, err := exec("add", "2026-09-01", "svc", "2.4.0", "svc exposes a v2 API", "-source", "https://example.com")
+	_, errOut, err = exec("add", "2026-09-01", "svc", "2.4.0", "svc exposes a v2 API", "-source", "https://example.com")
 	if err != nil || !strings.Contains(errOut, "added") {
 		t.Fatalf("add: %v %s", err, errOut)
+	}
+	out, _, err = exec("since", "2026-01-01")
+	if err != nil || !strings.Contains(out, "## golang") || strings.Contains(out, "## svc") {
+		t.Fatalf("default svc @ 2.3.0 still has nothing to report: %v\n%s", err, out)
 	}
 	data, _ := os.ReadFile(filepath.Join(repo, "axiomlog"))
 	if !strings.Contains(string(data), `"source":"https://example.com"`) {
@@ -199,6 +211,9 @@ func TestInit(t *testing.T) {
 	}
 	if !strings.Contains(errOut, `no axioms known for subject "golang-mod-golang.org/x/net" (run ax update golang-mod-golang.org/x/net)`) {
 		t.Fatalf("empty module subject should point at update:\n%s", errOut)
+	}
+	if strings.Contains(out, "golang-mod") {
+		t.Fatalf("subject with nothing to report should be omitted:\n%s", out)
 	}
 	out, _, _ = exec(filepath.Join(repo, "pkg"), "subjects")
 	if !strings.Contains(out, "golang\tshape [version:goversion]") || !strings.Contains(out, "default @ 1.26.1 (detected)") || !strings.Contains(out, "golang-mod-golang.org/x/net\tshape [version:semver]\t0 axiom(s)\tdefault @ v0.50.0 (detected)") {

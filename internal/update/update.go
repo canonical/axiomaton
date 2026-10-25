@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/tool"
@@ -74,6 +75,9 @@ type Updater struct {
 	Runtime     Runtime
 	Agent       Agent
 	ExecTimeout time.Duration
+	// Parallel is how many confirmations run at once; values below one mean
+	// one at a time.
+	Parallel int
 	// Log receives progress; nil discards it.
 	Log func(format string, args ...any)
 }
@@ -140,67 +144,136 @@ func (u *Updater) Confirm(ctx context.Context, a axiom.Axiom) (Verdict, error) {
 	return v, nil
 }
 
-// Run proposes and then confirms each proposal in its own container. When a
-// confirmation agent rejects a statement as inaccurate and offers a
-// correction, the correction is confirmed once more by a fresh agent and,
-// if that succeeds, replaces the proposal; otherwise the correction stays on
-// the verdict as a suggestion for the reviewer.
+// Run proposes and then confirms each proposal in its own container, up to
+// Parallel at a time, keeping the proposals in order. When a confirmation
+// agent rejects a statement as inaccurate and offers a correction, the
+// correction is confirmed once more by a fresh agent and, if that succeeds,
+// replaces the proposal; otherwise the correction stays on the verdict as a
+// suggestion for the reviewer.
 func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, string, error) {
 	proposed, summary, err := u.Propose(ctx, existing)
 	if err != nil {
 		return nil, summary, err
 	}
 	u.logf("update agent proposed %d axiom(s)", len(proposed))
-	known := map[string]bool{}
+	workers := max(1, u.Parallel)
+	if workers > 1 && len(proposed) > 1 {
+		u.logf("confirming up to %d at a time", min(workers, len(proposed)))
+	}
+	known := &idSet{ids: map[string]bool{}}
 	for _, a := range existing {
-		known[a.ID] = true
+		known.add(a.ID)
+	}
+	parent := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make([]Proposal, len(proposed))
+	dropped := make([]bool, len(proposed))
+	var (
+		wg       sync.WaitGroup
+		sem      = make(chan struct{}, workers)
+		firstErr error
+		errMu    sync.Mutex
+	)
+	for i, a := range proposed {
+		if ctx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			p, keep, err := u.confirmOne(ctx, i, len(proposed), a, known)
+			if err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				errMu.Unlock()
+				cancel()
+				return
+			}
+			results[i] = p
+			dropped[i] = !keep
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, summary, firstErr
+	}
+	if err := parent.Err(); err != nil {
+		return nil, summary, err
 	}
 	out := make([]Proposal, 0, len(proposed))
-	for i, a := range proposed {
-		u.logf("confirming %d/%d: %s", i+1, len(proposed), oneLine(a.Statement, 100))
-		p := Proposal{Axiom: a}
-		v, err := u.Confirm(ctx, a)
-		if err != nil {
-			if ctx.Err() != nil {
-				return out, summary, err
-			}
-			p.Error = err.Error()
-			u.logf("confirmation failed: %v", err)
-			out = append(out, p)
-			continue
+	for i := range results {
+		if !dropped[i] {
+			out = append(out, results[i])
 		}
-		p.Verdict = v
-		switch {
-		case v.Confirmed:
-			u.logf("confirmed: %s", oneLine(v.Reason, 160))
-		case v.Suggests():
-			u.logf("inaccurate: %s", oneLine(v.Reason, 160))
-			u.logf("suggested instead: %s", oneLine(v.Correction, 160))
-			fixed := p.Corrected()
-			if known[fixed.Axiom.ID] {
-				u.logf("the correction is already in the log; dropping the proposal")
-				continue
-			}
-			v2, err := u.Confirm(ctx, fixed.Axiom)
-			switch {
-			case err != nil && ctx.Err() != nil:
-				return out, summary, err
-			case err != nil:
-				u.logf("confirmation of the correction failed: %v", err)
-			case v2.Confirmed:
-				u.logf("correction confirmed: %s", oneLine(v2.Reason, 160))
-				fixed.Verdict = v2
-				p = fixed
-				known[p.Axiom.ID] = true
-			default:
-				u.logf("correction not confirmed: %s", oneLine(v2.Reason, 160))
-			}
-		default:
-			u.logf("unfounded: %s", oneLine(v.Reason, 160))
-		}
-		out = append(out, p)
 	}
 	return out, summary, nil
+}
+
+// confirmOne runs the confirmation (and, for an inaccurate statement, the
+// confirmation of its correction) for proposal i of n. keep is false when
+// the proposal should be dropped because its correction is already known.
+// A non-nil error means the run was cancelled.
+func (u *Updater) confirmOne(ctx context.Context, i, n int, a axiom.Axiom, known *idSet) (p Proposal, keep bool, err error) {
+	tag := fmt.Sprintf("[%d/%d]", i+1, n)
+	u.logf("%s confirming: %s", tag, oneLine(a.Statement, 100))
+	p = Proposal{Axiom: a}
+	v, err := u.Confirm(ctx, a)
+	if err != nil {
+		if ctx.Err() != nil {
+			return p, false, err
+		}
+		p.Error = err.Error()
+		u.logf("%s confirmation failed: %v", tag, err)
+		return p, true, nil
+	}
+	p.Verdict = v
+	switch {
+	case v.Confirmed:
+		u.logf("%s confirmed: %s", tag, oneLine(v.Reason, 160))
+	case v.Suggests():
+		u.logf("%s inaccurate: %s", tag, oneLine(v.Reason, 160))
+		u.logf("%s suggested instead: %s", tag, oneLine(v.Correction, 160))
+		fixed := p.Corrected()
+		if known.has(fixed.Axiom.ID) {
+			u.logf("%s the correction is already in the log; dropping the proposal", tag)
+			return p, false, nil
+		}
+		v2, err := u.Confirm(ctx, fixed.Axiom)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return p, false, err
+		case err != nil:
+			u.logf("%s confirmation of the correction failed: %v", tag, err)
+		case v2.Confirmed:
+			u.logf("%s correction confirmed: %s", tag, oneLine(v2.Reason, 160))
+			fixed.Verdict = v2
+			p = fixed
+			known.add(p.Axiom.ID)
+		default:
+			u.logf("%s correction not confirmed: %s", tag, oneLine(v2.Reason, 160))
+		}
+	default:
+		u.logf("%s unfounded: %s", tag, oneLine(v.Reason, 160))
+	}
+	return p, true, nil
+}
+
+// idSet is a concurrency safe set of axiom IDs.
+type idSet struct {
+	mu  sync.Mutex
+	ids map[string]bool
+}
+
+func (s *idSet) add(id string) { s.mu.Lock(); s.ids[id] = true; s.mu.Unlock() }
+func (s *idSet) has(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ids[id]
 }
 
 // Split separates confirmed proposals from those needing a human.
