@@ -60,19 +60,25 @@ Commands:
             go:<module>: that module's require line in go.mod; rust: the
             pinned toolchain or the rust-version in Cargo.toml; python:
             .python-version or the requires-python lower bound; zig:
-            .zigversion or minimum_zig_version in build.zig.zon).
+            .zigversion or minimum_zig_version in build.zig.zon;
+            snapcraft: the base in snapcraft.yaml, e.g. 24 for core24;
+            charmcraft and rockcraft: the base in their yaml, e.g. 24.04).
   for       Like since, with the cutoff taken from the knowledge cutoff that
             OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
   add       Append an axiom to the nearest writeable axiomlog.
   update    Run sandboxed agents (podman, or LXD containers or VMs) to
             extend the log of a built-in subject (go, python, rust, zig,
-            or go:<module> for a Go module dependency).
+            snapcraft, charmcraft, rockcraft, or go:<module> for a Go
+            module dependency). The three *craft subjects need an LXD
+            virtual machine.
   subjects  List known subjects and where they come from.
   init      Write an axiomaton.cnf for this project listing the built-in
             subjects detected here (go and one go:<module> subject per
             direct dependency, from go.mod; rust from Cargo.toml; python
             from pyproject.toml, setup.py, setup.cfg, Pipfile or
-            requirements.txt; zig from build.zig or build.zig.zon).
+            requirements.txt; zig from build.zig or build.zig.zon;
+            snapcraft from snapcraft.yaml; charmcraft from
+            charmcraft.yaml; rockcraft from rockcraft.yaml).
   setup     Write ax.cnf interactively and test the configured models.
 
 Global flags:
@@ -245,10 +251,15 @@ func (e *env) define(name string) {
 }
 
 // subject resolves a subject named by the user, registering it first when
-// it is a built-in family member.
+// it is a built-in family member. A built-in that accepts alternative clock
+// spellings (core24 for snapcraft's 24) has them normalised.
 func (e *env) subject(name string, values []string) (axiom.Subject, bool) {
 	e.define(name)
-	return e.reg.Resolve(name, values)
+	s, inferred := e.reg.Resolve(name, values)
+	if b, ok := subjects.Lookup(name); ok && !inferred {
+		s.Normalise = subjects.AxiomSubject(b).Normalise
+	}
+	return s, inferred
 }
 
 func parseDate(s string) (time.Time, error) {
@@ -567,7 +578,7 @@ func (a *app) update(ctx context.Context, args []string) error {
 		for _, p := range pending {
 			take := []update.Proposal{p}
 			if p.Verdict.Suggests() {
-				if rs, err := p.Suggested(axiom.Subject{Name: builtin.Name(), Shape: builtin.Shape()}); err == nil {
+				if rs, err := p.Suggested(subjects.AxiomSubject(builtin)); err == nil {
 					take = rs
 				} else {
 					a.warnf("ignoring the suggestion for %q: %v", oneLineStatement(p.Axiom.Statement), err)
@@ -580,7 +591,7 @@ func (a *app) update(ctx context.Context, args []string) error {
 			}
 		}
 	case isTerminal(os.Stdin):
-		accepted, err = update.Review(pending, os.Stdin, a.stderr, builtin.Shape())
+		accepted, err = update.Review(pending, os.Stdin, a.stderr, subjects.AxiomSubject(builtin))
 		if err != nil {
 			return err
 		}

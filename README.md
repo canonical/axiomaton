@@ -70,8 +70,11 @@ and every direct requirement in that `go.mod` adds a
 `go:<module path>` subject (e.g. `go:golang.org/x/net`);
 indirect requirements are skipped. `rust` is listed when a `Cargo.toml` is
 found the same way, `python` when a `pyproject.toml`, `setup.py`,
-`setup.cfg`, `Pipfile` or `requirements.txt` is, and `zig` when a `build.zig`
-or `build.zig.zon` is. Detected subjects are written without a
+`setup.cfg`, `Pipfile` or `requirements.txt` is, `zig` when a `build.zig`
+or `build.zig.zon` is, and `snapcraft` when a `snapcraft.yaml` is (under
+`snap/`, at the top level, as `.snapcraft.yaml` or under
+`build-aux/snap/`), `charmcraft` when a `charmcraft.yaml` is, and
+`rockcraft` when a `rockcraft.yaml` is. Detected subjects are written without a
 clock, and a built-in subject named without a clock, in the file or on the
 command line, takes its clock from the project at query time (`go` uses
 the `go` directive in `go.mod`; `go:<module>` uses that module's
@@ -81,8 +84,26 @@ inheritance to the workspace root; `python` uses the release pinned in
 `.python-version`, else the lower bound of `requires-python` in
 `pyproject.toml`, a Poetry `python` constraint, or a Pipfile
 `python_version`; `zig` uses the compiler pinned in `.zigversion`, else
-`minimum_zig_version` in `build.zig.zon`), so the file never goes stale. A
-project that pins nothing is reported without a clock, i.e. every release.
+`minimum_zig_version` in `build.zig.zon`; `snapcraft` uses the base number
+from `build-base`, else `base`, so `core24` is `24`; `charmcraft` uses the
+Ubuntu release number from `build-base`, else `base` (`ubuntu@24.04` is
+`24.04`), or the first `build-on` channel in the older `bases` format;
+`rockcraft` likewise uses `build-base`, else `base`, accepting both
+`ubuntu@24.04` and the older `ubuntu:22.04`, so a `bare` rock takes its
+`build-base`), so the file never goes stale. A project that pins nothing is reported without
+a clock, i.e. every release.
+
+The base may be written as it appears in the yaml wherever a clock is
+typed or suggested: `core26` and `ubuntu@24.04` are read as `26` and `24.04`
+by `ax add`, `-c` and the confirmation agent's corrections.
+
+`snapcraft`, `charmcraft` and `rockcraft` have two-part clocks: the base
+first, then the tool's release (`[snapcraft, 24, 8.3.0]`,
+`[charmcraft, 24.04, 3.4.0]`, `[rockcraft, 24.04, 1.5.0]`). A
+project pins only its base; an axiom carries the base it holds from and,
+when the behaviour arrived with a release rather than a base, that release
+too. Axioms whose base is newer than the project's are left out, and so are
+release-specific axioms newer than a release given explicitly.
 Give an explicit clock to pin a version instead. Further built-in subjects can
 be named as arguments, e.g. `ax init go go:golang.org/x/text`, and
 dependencies you do not want reported on can simply be deleted from the file.
@@ -191,6 +212,9 @@ The `ax` tool also contains these other commands:
 - `ax update rust`
 - `ax update python`
 - `ax update zig`
+- `ax update snapcraft`
+- `ax update charmcraft`
+- `ax update rockcraft`
 - `ax update go:golang.org/x/net`
 - `ax subjects`
 - `ax init`
@@ -201,7 +225,8 @@ repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
 repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
 The update command only works for built-in subjects: `go`, `python`, `rust`,
-`zig`, and `go:<module path>` for any Go module. All subject updates are performed as such, firstly, a sandboxed
+`zig`, `snapcraft`, `charmcraft`, `rockcraft`, and `go:<module path>` for any
+Go module. All subject updates are performed as such, firstly, a sandboxed
 agent is run (using github.com/microsoft/agent-framework-go, with tool calls
 running inside a fresh instance), to update the axiomlog
 based on go's release notes. The instance is a podman container when podman
@@ -209,8 +234,10 @@ is installed and an LXD system container otherwise (`update.backend`
 chooses explicitly: `podman`, `lxd`, or `lxd-vm` for LXD virtual machines).
 A built-in subject can declare that its agents need a real machine by
 implementing `RequiresVM() bool`; such subjects always run in an LXD virtual
-machine, and fail with a clear message if LXD is not installed. None of the
-shipped subjects needs one yet. For a module subject the agent takes the release
+machine, and fail with a clear message if LXD is not installed. `snapcraft`,
+`charmcraft` and `rockcraft` are such subjects: their agents install snapd,
+the tool and LXD inside the machine and run real builds to verify what they
+record. For a module subject the agent takes the release
 list and dates from the module proxy and works out what changed for callers
 from the module's release notes, an API comparison between tags (apidiff) and
 the commit log, starting from the newest release the log already covers, or,
@@ -260,7 +287,15 @@ python log at `internal/subjects/python/axiomlog` comes from
 What's New documents and installs exact CPython releases with uv. The zig
 log at `internal/subjects/zig/axiomlog` comes from
 `ax update zig -l internal/subjects/zig/axiomlog`; the agent reads each
-version's release notes and the download index on ziglang.org. The shipped
+version's release notes and the download index on ziglang.org. The
+snapcraft log at `internal/subjects/snapcraft/axiomlog` comes from
+`ax update snapcraft -l internal/subjects/snapcraft/axiomlog`, which runs
+in an LXD virtual machine; the agent reads the snapcraft release notes and
+builds small snaps on each base. Likewise
+`ax update charmcraft -l internal/subjects/charmcraft/axiomlog` for
+charmcraft, packing small charms, and
+`ax update rockcraft -l internal/subjects/rockcraft/axiomlog` for
+rockcraft, packing small rocks. The shipped
 module logs live under `internal/subjects/gomod/seeds/<module path>/axiomlog`,
 e.g. `ax update go:golang.org/x/net -l internal/subjects/gomod/seeds/golang.org/x/net/axiomlog`;
 adding a directory with an `axiomlog` there ships another module.

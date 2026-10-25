@@ -23,6 +23,11 @@ import (
 type Subject struct {
 	Name  string
 	Shape []ClockShape
+	// Normalise, when set, rewrites clock values into the subject's
+	// canonical spelling before they are parsed, so that an agent writing
+	// a base as core24 rather than 24 is understood. It must not change
+	// the number of values. Nil leaves values as given.
+	Normalise func(values []string) []string
 }
 
 // Clock builds a sub-clock map from positional values in shape order,
@@ -30,6 +35,9 @@ type Subject struct {
 func (s Subject) Clock(values []string) (map[string]string, error) {
 	if len(values) == 0 {
 		return nil, nil
+	}
+	if s.Normalise != nil {
+		values = s.Normalise(values)
 	}
 	if len(values) > len(s.Shape) {
 		return nil, fmt.Errorf("subject %s has %d clock dimension(s) but %d value(s) were given", s.Name, len(s.Shape), len(values))

@@ -34,7 +34,13 @@ func TestSeeds(t *testing.T) {
 	for _, b := range Builtins() {
 		names = append(names, b.Name())
 	}
-	if len(seeds) != len(names) || !strings.HasPrefix(strings.Join(names, ","), "go,python,rust,zig,go:golang.org/x/crypto,") || !strings.Contains(strings.Join(names, ","), ",go:golang.org/x/net,") || len(seeds[0]) < 20 {
+	goSeed := -1
+	for i, n := range names {
+		if n == "go" {
+			goSeed = i
+		}
+	}
+	if len(seeds) != len(names) || !strings.HasPrefix(strings.Join(names, ","), "charmcraft,go,python,rockcraft,rust,snapcraft,zig,go:golang.org/x/crypto,") || !strings.Contains(strings.Join(names, ","), ",go:golang.org/x/net,") || goSeed < 0 || len(seeds[goSeed]) < 20 {
 		t.Fatalf("unexpected seeds: %d for %v", len(seeds), names)
 	}
 	for i, seed := range seeds {
@@ -51,14 +57,14 @@ func TestSeeds(t *testing.T) {
 	if !ok || b.Shape()[0].Name != "version" {
 		t.Fatal("go lookup")
 	}
-	task := b.UpdateTask(seeds[0])
+	task := b.UpdateTask(seeds[goSeed])
 	if !strings.Contains(task, "newest Go release it covers is 1.27.0") {
 		t.Fatalf("task: %s", task)
 	}
 }
 
 func TestFamilies(t *testing.T) {
-	if got := strings.Join(Names(), ","); got != "go,python,rust,zig,go:<module path>" {
+	if got := strings.Join(Names(), ","); got != "charmcraft,go,python,rockcraft,rust,snapcraft,zig,go:<module path>" {
 		t.Fatalf("names: %s", got)
 	}
 	b, ok := Lookup("go:golang.org/x/net")
@@ -73,6 +79,27 @@ func TestFamilies(t *testing.T) {
 	}
 	if _, ok := Shapes()["go:example.com/unshipped"]; ok {
 		t.Fatal("unshipped family members are not enumerable")
+	}
+}
+
+func TestAxiomSubject(t *testing.T) {
+	snap, _ := Lookup("snapcraft")
+	s := AxiomSubject(snap)
+	if s.Name != "snapcraft" || len(s.Shape) != 2 || s.Normalise == nil {
+		t.Fatalf("snapcraft subject: %+v", s)
+	}
+	if c, err := s.Clock([]string{"core26", "8.11.0"}); err != nil || c["base"] != "26" || c["version"] != "8.11.0" {
+		t.Fatalf("core26 should normalise to 26: %v %v", c, err)
+	}
+	for _, name := range []string{"charmcraft", "rockcraft"} {
+		b, _ := Lookup(name)
+		if c, err := AxiomSubject(b).Clock([]string{"ubuntu@24.04"}); err != nil || c["base"] != "24.04" {
+			t.Fatalf("%s ubuntu@24.04 should normalise to 24.04: %v %v", name, c, err)
+		}
+	}
+	g, _ := Lookup("go")
+	if s := AxiomSubject(g); s.Normalise != nil {
+		t.Fatal("go has no clock normaliser")
 	}
 }
 
@@ -120,5 +147,21 @@ func TestDetect(t *testing.T) {
 	d = Detect(repo)
 	if len(d) != 3 || d[2].Subject.Name() != "zig" || d[2].Clock[0] != "0.14.0" {
 		t.Fatalf("zig: %+v", d)
+	}
+	os.MkdirAll(filepath.Join(repo, "snap"), 0o755)
+	os.WriteFile(filepath.Join(repo, "snap", "snapcraft.yaml"), []byte("name: x\nbase: core24\n"), 0o644)
+	d = Detect(repo)
+	if len(d) != 4 || d[2].Subject.Name() != "snapcraft" || d[2].Clock[0] != "24" || !RequiresVM(d[2].Subject) {
+		t.Fatalf("snapcraft: %+v", d)
+	}
+	os.WriteFile(filepath.Join(repo, "charmcraft.yaml"), []byte("type: charm\nbase: ubuntu@24.04\n"), 0o644)
+	d = Detect(repo)
+	if len(d) != 5 || d[0].Subject.Name() != "charmcraft" || d[0].Clock[0] != "24.04" || !RequiresVM(d[0].Subject) {
+		t.Fatalf("charmcraft: %+v", d)
+	}
+	os.WriteFile(filepath.Join(repo, "rockcraft.yaml"), []byte("name: x\nbase: ubuntu@22.04\n"), 0o644)
+	d = Detect(repo)
+	if len(d) != 6 || d[2].Subject.Name() != "rockcraft" || d[2].Clock[0] != "22.04" || !RequiresVM(d[2].Subject) {
+		t.Fatalf("rockcraft: %+v", d)
 	}
 }

@@ -221,7 +221,7 @@ func (u *Updater) logf(format string, args ...any) {
 }
 
 func (u *Updater) subject() axiom.Subject {
-	return axiom.Subject{Name: u.Subject.Name(), Shape: u.Subject.Shape()}
+	return subjects.AxiomSubject(u.Subject)
 }
 
 // Propose runs the update agent in a fresh container and returns the axioms
@@ -480,11 +480,11 @@ func Split(props []Proposal) (confirmed []axiom.Axiom, pending []Proposal) {
 // returns the accepted axioms. Answers: y(es), n(o), e(dit statement),
 // q(uit) and, when the confirmation agent suggested a correction to the
 // statement, date or clock, c(orrection) to accept that instead.
-func Review(pending []Proposal, in io.Reader, out io.Writer, shape []axiom.ClockShape) ([]axiom.Axiom, error) {
+func Review(pending []Proposal, in io.Reader, out io.Writer, subject axiom.Subject) ([]axiom.Axiom, error) {
 	r := bufio.NewReader(in)
+	shape := subject.Shape
 	var accepted []axiom.Axiom
 	for i, p := range pending {
-		subject := axiom.Subject{Name: p.Axiom.Subject, Shape: shape}
 		fmt.Fprintf(out, "\n[%d/%d] %s %s\n  %s\n", i+1, len(pending), p.Axiom.Time.Format("2006-01-02"), p.Axiom.ClockString(shape), p.Axiom.Statement)
 		if p.Axiom.Source != "" {
 			fmt.Fprintf(out, "  source: %s\n", p.Axiom.Source)

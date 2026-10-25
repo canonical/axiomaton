@@ -15,6 +15,7 @@
 package axiom
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -153,6 +154,15 @@ func TestRegistry(t *testing.T) {
 	}
 	if _, err := s.Clock([]string{"1", "2"}); err == nil {
 		t.Fatal("too many values should fail")
+	}
+	n := Subject{Name: "n", Shape: []ClockShape{{Name: "base", Kind: KindNumber}}, Normalise: func(v []string) []string {
+		return []string{strings.TrimPrefix(v[0], "core")}
+	}}
+	if clock, err := n.Clock([]string{"core24"}); err != nil || clock["base"] != "24" {
+		t.Fatalf("normalised clock = %v, %v", clock, err)
+	}
+	if _, err := n.Clock([]string{"corex"}); err == nil {
+		t.Fatal("normalising must not bypass validation")
 	}
 	s2, inferred := r.Resolve("other", []string{"2.3.4", "7"})
 	if !inferred || s2.Shape[0].Kind != KindSemver || s2.Shape[1].Kind != KindNumber {

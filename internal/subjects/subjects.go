@@ -20,10 +20,13 @@ import (
 	"strings"
 
 	"github.com/canonical/axiomaton/internal/axiom"
+	"github.com/canonical/axiomaton/internal/subjects/charmcraft"
 	"github.com/canonical/axiomaton/internal/subjects/golang"
 	"github.com/canonical/axiomaton/internal/subjects/gomod"
 	"github.com/canonical/axiomaton/internal/subjects/python"
+	"github.com/canonical/axiomaton/internal/subjects/rockcraft"
 	"github.com/canonical/axiomaton/internal/subjects/rust"
+	"github.com/canonical/axiomaton/internal/subjects/snapcraft"
 	"github.com/canonical/axiomaton/internal/subjects/zig"
 )
 
@@ -45,6 +48,26 @@ type Builtin interface {
 	// Detect reports whether the project at dir uses this subject and, if
 	// so, the project's current clock and where it was read from.
 	Detect(dir string) (clock []string, source string, ok bool)
+}
+
+// ClockNormaliser is implemented by built-in subjects that accept
+// alternative spellings of their clock values from agents and users, for
+// example a snapcraft base written core24 rather than 24. NormaliseClock
+// returns the canonical values; it must not change their number and leaves
+// anything it does not recognise alone for validation to reject.
+type ClockNormaliser interface {
+	NormaliseClock(values []string) []string
+}
+
+// AxiomSubject builds the axiom.Subject for a built-in, carrying its clock
+// normaliser when it has one. Use it wherever clock values typed by a
+// person or an agent are parsed for a built-in subject.
+func AxiomSubject(b Builtin) axiom.Subject {
+	s := axiom.Subject{Name: b.Name(), Shape: b.Shape()}
+	if n, ok := b.(ClockNormaliser); ok {
+		s.Normalise = n.NormaliseClock
+	}
+	return s
 }
 
 // VMRequirer is implemented by built-in subjects whose agents need a full
@@ -115,10 +138,13 @@ func Detect(dir string) []Detected {
 }
 
 var all = map[string]Builtin{
-	golang.Name: golang.Subject{},
-	python.Name: python.Subject{},
-	rust.Name:   rust.Subject{},
-	zig.Name:    zig.Subject{},
+	charmcraft.Name: charmcraft.Subject{},
+	golang.Name:     golang.Subject{},
+	python.Name:     python.Subject{},
+	rockcraft.Name:  rockcraft.Subject{},
+	rust.Name:       rust.Subject{},
+	snapcraft.Name:  snapcraft.Subject{},
+	zig.Name:        zig.Subject{},
 }
 
 var families = []Family{gomodFamily{}}

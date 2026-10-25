@@ -27,6 +27,7 @@ import (
 
 	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/subjects"
+	"github.com/canonical/axiomaton/internal/subjects/snapcraft"
 )
 
 type fakeContainer struct {
@@ -266,7 +267,7 @@ func TestUpdaterRun(t *testing.T) {
 	}
 
 	var out strings.Builder
-	accepted, err := Review(pending, strings.NewReader("c\n?\ne\nedited statement\nc\nc\nn\nn\nn\n"), &out, b.Shape())
+	accepted, err := Review(pending, strings.NewReader("c\n?\ne\nedited statement\nc\nc\nn\nn\nn\n"), &out, subjects.AxiomSubject(b))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +282,7 @@ func TestUpdaterRun(t *testing.T) {
 	}
 	// A date and clock suggestion is applied by c.
 	dated := Proposal{Axiom: pending[0].Axiom, Verdict: Verdict{Reason: "wrong release", Date: "2027-03-02", Clock: []string{"1.28.1"}}}
-	accepted, _ = Review([]Proposal{dated}, strings.NewReader("c\n"), &out, b.Shape())
+	accepted, _ = Review([]Proposal{dated}, strings.NewReader("c\n"), &out, subjects.AxiomSubject(b))
 	if len(accepted) != 1 || accepted[0].Statement != "this is dubious" || accepted[0].Time.Format("2006-01-02") != "2027-03-02" || accepted[0].Clock["version"] != "1.28.1" {
 		t.Fatalf("dated suggestion: %+v", accepted)
 	}
@@ -291,14 +292,14 @@ func TestUpdaterRun(t *testing.T) {
 	// A split suggestion is shown part by part and c accepts every part.
 	twofold := Proposal{Axiom: pending[0].Axiom, Verdict: Verdict{Reason: "two facts", Split: []Part{{Statement: "part one"}, {Statement: "part two", Clock: []string{"1.28.1"}}}}}
 	out.Reset()
-	accepted, _ = Review([]Proposal{twofold}, strings.NewReader("c\n"), &out, b.Shape())
+	accepted, _ = Review([]Proposal{twofold}, strings.NewReader("c\n"), &out, subjects.AxiomSubject(b))
 	if len(accepted) != 2 || accepted[0].Statement != "part one" || accepted[1].Statement != "part two" || accepted[1].Clock["version"] != "1.28.1" || accepted[1].By != "user" {
 		t.Fatalf("split accepted: %+v", accepted)
 	}
 	if !strings.Contains(out.String(), "suggested split into 2:\n    1. part one\n    2. part two [1.28.1]\n") {
 		t.Fatalf("review output:\n%s", out.String())
 	}
-	accepted, _ = Review(pending, strings.NewReader("n\nn\nn\nn\nn\n"), &out, b.Shape())
+	accepted, _ = Review(pending, strings.NewReader("n\nn\nn\nn\nn\n"), &out, subjects.AxiomSubject(b))
 	if len(accepted) != 0 {
 		t.Fatal("declined should not be accepted")
 	}
@@ -417,6 +418,23 @@ func TestCorrected(t *testing.T) {
 	}
 	if got := (Verdict{Split: []Part{{Statement: "a"}, {Statement: "b", Date: "2027-03-02", Clock: []string{"1.28.1"}}}}).Suggestion(); got != "split into 2: 1. a 2. b [2027-03-02 1.28.1]" {
 		t.Fatalf("suggestion: %q", got)
+	}
+}
+
+func TestSuggestedClockSpelling(t *testing.T) {
+	subject := subjects.AxiomSubject(snapcraft.Subject{})
+	p := Proposal{
+		Axiom:   axiom.Axiom{Subject: "snapcraft", Time: time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC), Clock: map[string]string{"base": "24", "version": "8.10.0"}, Statement: "core26 is supported"},
+		Verdict: Verdict{Confirmed: false, Clock: []string{"core26", "8.11.0"}, Reason: "lands in 8.11"},
+	}
+	p.Axiom.Normalise()
+	rs, err := p.Suggested(subject)
+	if err != nil || len(rs) != 1 || rs[0].Axiom.Clock["base"] != "26" || rs[0].Axiom.Clock["version"] != "8.11.0" || rs[0].Original == nil {
+		t.Fatalf("a base spelt core26 must be applied as 26: %+v %v", rs, err)
+	}
+	p.Verdict.Clock = []string{"bare", "8.11.0"}
+	if _, err := p.Suggested(subject); err == nil || !strings.Contains(err.Error(), "is not a number") {
+		t.Fatalf("unrecognised base must still be refused: %v", err)
 	}
 }
 

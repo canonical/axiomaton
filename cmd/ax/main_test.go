@@ -358,6 +358,97 @@ func TestInit(t *testing.T) {
 	if !strings.Contains(out, "## zig (version <= 0.14.1)") || !strings.Contains(out, "- **[0.14.0]** zig fact") {
 		t.Fatalf("pinned compiler:\n%s", out)
 	}
+
+	// A snap project: detected from snapcraft.yaml, clocked by its base;
+	// axioms may carry the base alone or the base and a release.
+	sn := filepath.Join(root, "snap")
+	os.MkdirAll(filepath.Join(sn, ".git"), 0o755)
+	os.MkdirAll(filepath.Join(sn, "snap"), 0o755)
+	os.WriteFile(filepath.Join(sn, "snap", "snapcraft.yaml"), []byte("name: s\nbase: core22\n"), 0o644)
+	_, errOut, err = exec(sn, "init")
+	if err != nil || !strings.Contains(errOut, "snapcraft @ 22 (from snap/snapcraft.yaml)") {
+		t.Fatalf("snapcraft init: %v %s", err, errOut)
+	}
+	if _, _, err = exec(sn, "add", "2024-07-11", "snapcraft", "24", "8.3.0", "platforms replace architectures"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = exec(sn, "add", "2024-02-01", "snapcraft", "22", "craftctl replaces snapcraftctl"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = exec(sn, "since", "2024-01-01")
+	if !strings.Contains(out, "## snapcraft (base <= 22)") || !strings.Contains(out, "- **[22]** craftctl") || strings.Contains(out, "platforms replace") {
+		t.Fatalf("core22 project:\n%s", out)
+	}
+	os.WriteFile(filepath.Join(sn, "snap", "snapcraft.yaml"), []byte("name: s\nbase: core24\n"), 0o644)
+	out, _, _ = exec(sn, "since", "2024-01-01")
+	if !strings.Contains(out, "## snapcraft (base <= 24)") || !strings.Contains(out, "- **[24 8.3.0]** platforms replace architectures") {
+		t.Fatalf("core24 project:\n%s", out)
+	}
+	out, _, _ = exec(sn, "since", "2024-01-01", "snapcraft", "24", "8.2.0")
+	if strings.Contains(out, "platforms replace") {
+		t.Fatalf("release bound should exclude 8.3.0 at 8.2.0:\n%s", out)
+	}
+	// The base may be typed as it appears in snapcraft.yaml.
+	if _, _, err = exec(sn, "add", "2025-09-01", "snapcraft", "core26", "8.11.0", "core26 is a supported base"); err != nil {
+		t.Fatalf("add with core26: %v", err)
+	}
+	out, _, _ = exec(sn, "since", "2024-01-01", "snapcraft", "core26", "8.11.0")
+	if !strings.Contains(out, "- **[26 8.11.0]** core26 is a supported base") {
+		t.Fatalf("core26 should be read as base 26:\n%s", out)
+	}
+	if _, errOut, err = exec(sn, "add", "2025-09-01", "snapcraft", "bare", "8.11.0", "nonsense"); err == nil || !strings.Contains(err.Error()+errOut, "is not a number") {
+		t.Fatalf("an unrecognised base must still be rejected: %v %s", err, errOut)
+	}
+
+	// A charm project: detected from charmcraft.yaml, clocked by its
+	// Ubuntu base.
+	ch := filepath.Join(root, "charm")
+	os.MkdirAll(filepath.Join(ch, ".git"), 0o755)
+	os.WriteFile(filepath.Join(ch, "charmcraft.yaml"), []byte("type: charm\nbase: ubuntu@22.04\n"), 0o644)
+	_, errOut, err = exec(ch, "init")
+	if err != nil || !strings.Contains(errOut, "charmcraft @ 22.04 (from charmcraft.yaml)") {
+		t.Fatalf("charmcraft init: %v %s", err, errOut)
+	}
+	if _, _, err = exec(ch, "add", "2024-09-10", "charmcraft", "24.04", "3.2.0", "platforms replace bases"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = exec(ch, "add", "2024-02-01", "charmcraft", "22.04", "fetch-libs reads charmcraft.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = exec(ch, "since", "2024-01-01")
+	if !strings.Contains(out, "## charmcraft (base <= 22.04)") || !strings.Contains(out, "- **[22.04]** fetch-libs") || strings.Contains(out, "platforms replace") {
+		t.Fatalf("22.04 charm:\n%s", out)
+	}
+	os.WriteFile(filepath.Join(ch, "charmcraft.yaml"), []byte("type: charm\nbase: ubuntu@24.04\n"), 0o644)
+	out, _, _ = exec(ch, "since", "2024-01-01")
+	if !strings.Contains(out, "## charmcraft (base <= 24.04)") || !strings.Contains(out, "- **[24.04 3.2.0]** platforms replace bases") {
+		t.Fatalf("24.04 charm:\n%s", out)
+	}
+
+	// A rock project: detected from rockcraft.yaml, clocked by its base,
+	// with bare rocks taking the build-base.
+	rk := filepath.Join(root, "rock")
+	os.MkdirAll(filepath.Join(rk, ".git"), 0o755)
+	os.WriteFile(filepath.Join(rk, "rockcraft.yaml"), []byte("name: r\nbase: bare\nbuild-base: ubuntu@22.04\n"), 0o644)
+	_, errOut, err = exec(rk, "init")
+	if err != nil || !strings.Contains(errOut, "rockcraft @ 22.04 (from rockcraft.yaml)") {
+		t.Fatalf("rockcraft init: %v %s", err, errOut)
+	}
+	if _, _, err = exec(rk, "add", "2024-06-20", "rockcraft", "24.04", "1.5.0", "noble rocks"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = exec(rk, "add", "2024-02-01", "rockcraft", "22.04", "pebble is the entrypoint"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = exec(rk, "since", "2024-01-01")
+	if !strings.Contains(out, "## rockcraft (base <= 22.04)") || !strings.Contains(out, "- **[22.04]** pebble") || strings.Contains(out, "noble rocks") {
+		t.Fatalf("22.04 rock:\n%s", out)
+	}
+	os.WriteFile(filepath.Join(rk, "rockcraft.yaml"), []byte("name: r\nbase: ubuntu@24.04\n"), 0o644)
+	out, _, _ = exec(rk, "since", "2024-01-01")
+	if !strings.Contains(out, "## rockcraft (base <= 24.04)") || !strings.Contains(out, "- **[24.04 1.5.0]** noble rocks") {
+		t.Fatalf("24.04 rock:\n%s", out)
+	}
 	_, errOut, err = exec(other, "init", "-force", "go")
 	if err != nil || !strings.Contains(errOut, "ax:   go") {
 		t.Fatalf("requested init: %v %s", err, errOut)
