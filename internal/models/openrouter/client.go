@@ -96,10 +96,7 @@ func (c *Client) get(ctx context.Context, url string, resp any) error {
 // request performs one API call, retrying rate limited and transient
 // failures with exponential backoff and full jitter.
 func (c *Client) request(ctx context.Context, method, url string, body []byte, resp any) error {
-	attempts := c.Retry.MaxAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(c.Retry.MaxAttempts, 1)
 	var last error
 	for attempt := 1; ; attempt++ {
 		data, retryAfter, err := c.do(ctx, method, url, body)
@@ -123,8 +120,7 @@ func (c *Client) request(ctx context.Context, method, url string, body []byte, r
 		}
 	}
 	if attempts > 1 {
-		var te *transientError
-		if errors.As(last, &te) {
+		if _, ok := errors.AsType[*transientError](last); ok {
 			return fmt.Errorf("%w (gave up after %d attempts)", last, attempts)
 		}
 	}
@@ -237,10 +233,7 @@ func (c *Client) backoff(attempt int, retryAfter time.Duration) time.Duration {
 	if ceiling > maxDelay || ceiling <= 0 {
 		ceiling = maxDelay
 	}
-	delay := time.Duration(rand.Int64N(int64(ceiling)) + 1)
-	if retryAfter > delay {
-		delay = retryAfter
-	}
+	delay := max(retryAfter, time.Duration(rand.Int64N(int64(ceiling))+1))
 	if cap := 2 * maxDelay; retryAfter > cap {
 		delay = cap
 	}

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"runtime"
 	"strings"
@@ -179,9 +180,7 @@ func (u *User) merge(o User) {
 		}
 		u.Providers[name] = base
 	}
-	for role, m := range o.Models {
-		u.Models[role] = m
-	}
+	maps.Copy(u.Models, o.Models)
 	if o.SummaryBudget > 0 {
 		u.SummaryBudget = o.SummaryBudget
 	}

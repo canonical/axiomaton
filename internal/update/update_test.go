@@ -281,7 +281,7 @@ func TestParallelConfirmation(t *testing.T) {
 		props, _, err = u.Run(context.Background(), nil)
 	}()
 	// The update agent's container, then three confirmations.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		rt.hold <- struct{}{}
 	}
 	for {

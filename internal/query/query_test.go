@@ -119,7 +119,7 @@ func TestDeterministicOnly(t *testing.T) {
 		t.Fatalf("output must carry clocks but no dates or sources:\n%s", md)
 	}
 	// An axiom without a clock is a bare statement.
-	plain := Result{Request: Request{Subject: axiom.Subject{Name: "notes"}}, Added: []Entry{{Axiom: axiom.Axiom{Statement: "just a fact", Source: "https://x"}}}}
+	plain := Result{Subject: axiom.Subject{Name: "notes"}, Added: []Entry{{Axiom: axiom.Axiom{Statement: "just a fact", Source: "https://x"}}}}
 	if md := Render([]Result{plain}); !strings.Contains(md, "\n- just a fact\n") || strings.Contains(md, "https://x") {
 		t.Fatalf("unclocked entry:\n%s", md)
 	}
@@ -221,8 +221,8 @@ func TestRenderOmitsQuietSubjects(t *testing.T) {
 	quiet := Request{Since: day("2030-01-01"), Subject: axiom.Subject{Name: "go", Shape: shape}, Clock: map[string]string{"version": "1.26.1"}}
 	rq, _ := Evaluate(context.Background(), corpus(), quiet, Resolver{})
 	rq.Subject.Name = "quiet"
-	none := Result{Request: Request{Subject: axiom.Subject{Name: "empty"}}}
-	restatedOnly := Result{Request: Request{Subject: axiom.Subject{Name: "echo"}}, Restated: []Entry{{}}}
+	none := Result{Subject: axiom.Subject{Name: "empty"}}
+	restatedOnly := Result{Subject: axiom.Subject{Name: "echo"}, Restated: []Entry{{}}}
 
 	md := Render([]Result{rq, rb, none, restatedOnly})
 	if !strings.Contains(md, "## go (version <= 1.26.1)") || !strings.Contains(md, "### Added") {

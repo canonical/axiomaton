@@ -20,6 +20,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/config"
@@ -107,8 +108,8 @@ func (ws *Workspace) Registry(builtin map[string][]axiom.ClockShape) (*axiom.Reg
 		}
 	}
 	// Apply outermost first so the nearest definition overrides.
-	for i := len(ws.Layers) - 1; i >= 0; i-- {
-		if p := ws.Layers[i].Project; p != nil {
+	for _, v := range slices.Backward(ws.Layers) {
+		if p := v.Project; p != nil {
 			if err := p.Apply(reg); err != nil {
 				return nil, err
 			}
@@ -156,8 +157,8 @@ func (ws *Workspace) Load(builtin ...[]axiom.Axiom) ([]axiom.Axiom, error) {
 	} else if len(user) > 0 {
 		logs = append(logs, user)
 	}
-	for i := len(ws.Layers) - 1; i >= 0; i-- {
-		l := ws.Layers[i]
+	for _, l := range slices.Backward(ws.Layers) {
+
 		if !l.HasLog {
 			continue
 		}

@@ -147,7 +147,7 @@ var (
 // handled only as far as tomlInherits needs.
 func tomlString(text, table, key string) string {
 	section := ""
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = stripComment(line)
 		if line == "" {
 			continue
@@ -176,7 +176,7 @@ func tomlString(text, table, key string) string {
 // written either as key.workspace = true or key = { workspace = true }.
 func tomlInherits(text, table, key string) bool {
 	section := ""
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = stripComment(line)
 		if line == "" {
 			continue

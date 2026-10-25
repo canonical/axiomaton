@@ -206,11 +206,9 @@ func (f FrameworkAgent) newAgent(instructions string, tools []tool.Tool) *agent.
 		autocall.MaximumIterationsPerRequest = &n
 	}
 	return openaiprovider.NewChatCompletionsAgent(f.client(), openaiprovider.AgentConfig{
-		Config: agent.Config{
-			Name:   "axiomaton",
-			Tools:  tools,
-			Logger: f.Logger,
-		},
+		Name:         "axiomaton",
+		Tools:        tools,
+		Logger:       f.Logger,
 		ProviderName: f.Endpoint.Provider,
 		Instructions: instructions,
 		Model:        f.Endpoint.Model,
@@ -246,9 +244,9 @@ func (f FrameworkAgent) run(ctx context.Context, a *agent.Agent, session *agent.
 }
 
 func lastAssistant(resp *agent.Response) *message.Message {
-	for i := len(resp.Messages) - 1; i >= 0; i-- {
-		if resp.Messages[i].Role == message.RoleAssistant {
-			return resp.Messages[i]
+	for _, v := range slices.Backward(resp.Messages) {
+		if v.Role == message.RoleAssistant {
+			return v
 		}
 	}
 	return nil

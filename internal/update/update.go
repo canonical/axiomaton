@@ -180,9 +180,7 @@ func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, 
 			break
 		}
 		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
 			p, keep, err := u.confirmOne(ctx, i, len(proposed), a, known)
 			if err != nil {
@@ -196,7 +194,7 @@ func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, 
 			}
 			results[i] = p
 			dropped[i] = !keep
-		}()
+		})
 	}
 	wg.Wait()
 	if firstErr != nil {

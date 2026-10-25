@@ -165,10 +165,9 @@ func PercentileLead(obs []Observation) Lead {
 		return Lead{Days: DefaultLeadDays}
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i].days < gaps[j].days })
-	rank := (LeadPercentile*len(gaps) + 99) / 100 // ceil(p/100 * n), 1-based
-	if rank < 1 {
-		rank = 1
-	}
+	rank := max(
+		// ceil(p/100 * n), 1-based
+		(LeadPercentile*len(gaps)+99)/100, 1)
 	g := gaps[rank-1]
 	return Lead{Days: g.days, Model: g.model, Sample: len(gaps)}
 }
