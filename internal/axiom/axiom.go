@@ -25,6 +25,12 @@ import (
 	"time"
 )
 
+// GlobalEpoch is the earliest cutoff ax ever reports from: the cutoff of last
+// resort when nothing is known about a model, and the point before which no
+// axiom can appear in any answer. Update agents need not record anything
+// older.
+var GlobalEpoch = time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+
 // Axiom is a statement considered true for a subject at a given clock.
 type Axiom struct {
 	// ID is a content hash of the subject, clock and statement.

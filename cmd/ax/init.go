@@ -82,8 +82,10 @@ func (a *app) init(_ context.Context, args []string) error {
 	b.WriteString("#\n")
 	b.WriteString("# `ax since <date>` reports what changed for every subject listed here.\n")
 	b.WriteString("# Built-in subjects need no clock: the project's own files are read at\n")
-	b.WriteString("# query time (golang uses the go directive in go.mod). Give an explicit\n")
-	b.WriteString("# clock, e.g. [golang, 1.26.1], to pin a version instead.\n")
+	b.WriteString("# query time (golang uses the go directive in go.mod; golang-mod-<module>\n")
+	b.WriteString("# uses that module's require line). Give an explicit clock, e.g.\n")
+	b.WriteString("# [golang, 1.26.1], to pin a version instead. Remove any dependency you\n")
+	b.WriteString("# do not want reported on; `ax update <subject>` builds its log.\n")
 	b.WriteString("# Built-in subjects: " + strings.Join(subjects.Names(), ", ") + ".\n")
 	b.WriteString("subjects:\n")
 	if len(entries) == 0 {

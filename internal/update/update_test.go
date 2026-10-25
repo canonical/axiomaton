@@ -17,6 +17,7 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,8 @@ func (f *fakeAgent) Run(_ context.Context, instructions, task string, tools []to
 		f.t.Logf("shell: %s", call(f.t, tools, "shell", ShellInput{Command: "apt-get update"}))
 		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is true", Source: "https://go.dev/doc/go1.28"})
 		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is dubious", Source: "https://go.dev/doc/go1.28"})
+		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is nearly true", Source: "https://go.dev/doc/go1.28"})
+		call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is slightly off", Source: "https://go.dev/doc/go1.28"})
 		// Duplicate and invalid proposals must be rejected, not crash.
 		if r := call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"1.28.0"}, Statement: "this is true"}); !strings.Contains(r, "already recorded") {
 			f.t.Fatalf("duplicate not rejected: %s", r)
@@ -94,8 +97,26 @@ func (f *fakeAgent) Run(_ context.Context, instructions, task string, tools []to
 		return "covered 1.28.0", nil
 	}
 	v := out.(*Verdict)
-	v.Confirmed = strings.Contains(task, "this is true")
-	v.Reason = "checked"
+	if !strings.Contains(instructions, "distinguish two cases") || !strings.Contains(task, "a correction giving the") {
+		f.t.Fatalf("confirmation prompts do not ask for a correction:\n%s\n%s", instructions, task)
+	}
+	switch {
+	case strings.Contains(task, "Statement: this is true"), strings.Contains(task, "Statement: this is exactly true"):
+		v.Confirmed = true
+		v.Reason = "checked"
+	case strings.Contains(task, "Statement: this is nearly true"):
+		// Inaccurate: the correction is then confirmed by a fresh agent.
+		v.Reason = "overstated"
+		v.Correction = " this is exactly true "
+	case strings.Contains(task, "Statement: this is slightly off"):
+		// Inaccurate, but the correction does not survive confirmation.
+		v.Reason = "wrong release"
+		v.Correction = "this is still off"
+	case strings.Contains(task, "Statement: this is still off"):
+		v.Reason = "also wrong"
+	default:
+		v.Reason = "checked"
+	}
 	return "", nil
 }
 
@@ -110,10 +131,12 @@ func TestUpdaterRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary != "covered 1.28.0" || len(props) != 2 || ag.runs != 3 {
+	// One update run, four confirmations and two re-confirmations of
+	// suggested corrections.
+	if summary != "covered 1.28.0" || len(props) != 4 || ag.runs != 7 {
 		t.Fatalf("props=%d summary=%q runs=%d", len(props), summary, ag.runs)
 	}
-	if len(rt.started) != 3 {
+	if len(rt.started) != 7 {
 		t.Fatalf("expected a fresh container per agent, got %d", len(rt.started))
 	}
 	for _, c := range rt.started {
@@ -122,25 +145,37 @@ func TestUpdaterRun(t *testing.T) {
 		}
 	}
 	confirmed, pending := Split(props)
-	if len(confirmed) != 1 || confirmed[0].Statement != "this is true" || confirmed[0].By != "agent" {
+	if len(confirmed) != 2 || confirmed[0].Statement != "this is true" || confirmed[0].By != "agent" {
 		t.Fatalf("confirmed: %+v", confirmed)
 	}
-	if len(pending) != 1 || pending[0].Axiom.Statement != "this is dubious" {
+	if confirmed[1].Statement != "this is exactly true" || confirmed[1].By != "agent" || confirmed[1].Source != "https://go.dev/doc/go1.28" || confirmed[1].ID == "" {
+		t.Fatalf("corrected axiom: %+v", confirmed[1])
+	}
+	if props[2].Original == nil || props[2].Original.Statement != "this is nearly true" || props[2].Verdict.Correction != "" || !props[2].Verdict.Confirmed {
+		t.Fatalf("corrected proposal should keep the original: %+v", props[2])
+	}
+	if len(pending) != 2 || pending[0].Axiom.Statement != "this is dubious" || pending[0].Verdict.Suggests() {
 		t.Fatalf("pending: %+v", pending)
+	}
+	if p := pending[1]; p.Axiom.Statement != "this is slightly off" || !p.Verdict.Suggests() || p.Verdict.Correction != "this is still off" || p.Original != nil {
+		t.Fatalf("unconfirmed correction should stay a suggestion: %+v", p)
 	}
 
 	var out strings.Builder
-	accepted, err := Review(pending, strings.NewReader("?\ne\nedited statement\n"), &out, b.Shape())
+	accepted, err := Review(pending, strings.NewReader("c\n?\ne\nedited statement\nc\n"), &out, b.Shape())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(accepted) != 1 || accepted[0].Statement != "edited statement" || accepted[0].By != "user" {
+	if len(accepted) != 2 || accepted[0].Statement != "edited statement" || accepted[0].By != "user" || accepted[1].Statement != "this is still off" || accepted[1].By != "user" {
 		t.Fatalf("accepted: %+v", accepted)
 	}
-	if !strings.Contains(out.String(), "not confirmed: checked") {
-		t.Fatalf("review output:\n%s", out.String())
+	if o := out.String(); !strings.Contains(o, "not confirmed: checked") || !strings.Contains(o, "inaccurate: wrong release\n  suggested instead: this is still off") || !strings.Contains(o, "[y/n/c=suggestion/e/q]") {
+		t.Fatalf("review output:\n%s", o)
 	}
-	accepted, _ = Review(pending, strings.NewReader("n\n"), &out, b.Shape())
+	if strings.Count(out.String(), "[y/n/e/q]") < 2 {
+		t.Fatalf("c without a suggestion should re-prompt:\n%s", out.String())
+	}
+	accepted, _ = Review(pending, strings.NewReader("n\nn\n"), &out, b.Shape())
 	if len(accepted) != 0 {
 		t.Fatal("declined should not be accepted")
 	}
@@ -148,6 +183,33 @@ func TestUpdaterRun(t *testing.T) {
 	path := t.TempDir() + "/axiomlog.pending"
 	if err := WritePending(path, pending); err != nil {
 		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `"correction":"this is still off"`) {
+		t.Fatalf("pending file lacks the suggestion:\n%s", data)
+	}
+}
+
+func TestCorrectionAlreadyKnown(t *testing.T) {
+	// A correction that matches an existing axiom is dropped rather than
+	// confirmed again.
+	rt := &fakeRuntime{}
+	ag := newFakeAgent(t)
+	b, _ := subjects.Lookup("golang")
+	existing := axiom.Axiom{Subject: "golang", Time: time.Date(2027, 2, 9, 0, 0, 0, 0, time.UTC), Clock: map[string]string{"version": "1.28.0"}, Statement: "this is exactly true"}
+	existing.Normalise()
+	u := &Updater{Subject: b, Runtime: rt, Agent: ag, ExecTimeout: time.Second, Log: t.Logf}
+	props, _, err := u.Run(context.Background(), []axiom.Axiom{existing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range props {
+		if p.Axiom.Statement == "this is exactly true" || p.Axiom.Statement == "this is nearly true" {
+			t.Fatalf("known correction should be dropped: %+v", p)
+		}
+	}
+	if len(props) != 3 || ag.runs != 6 {
+		t.Fatalf("props=%d runs=%d", len(props), ag.runs)
 	}
 }
 

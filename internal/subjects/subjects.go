@@ -17,9 +17,11 @@ package subjects
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/subjects/golang"
+	"github.com/canonical/axiomaton/internal/subjects/gomod"
 )
 
 // Builtin is a subject ax knows how to update by itself.
@@ -50,13 +52,31 @@ type Detected struct {
 	Source string
 }
 
-// Detect runs every built-in subject's detection against dir.
+// Family is an open-ended set of built-in subjects sharing a name prefix,
+// such as one subject per Go module dependency. Its members cannot be
+// enumerated, so they have no seeds and are only registered when named or
+// detected.
+type Family interface {
+	// Prefix starts every member's name.
+	Prefix() string
+	// Pattern describes member names in help text, e.g. golang-mod-<module>.
+	Pattern() string
+	// Lookup builds the member with the given full name.
+	Lookup(name string) (Builtin, bool)
+	// Detect lists the members the project at dir uses.
+	Detect(dir string) []Detected
+}
+
+// Detect runs every built-in subject's and family's detection against dir.
 func Detect(dir string) []Detected {
 	var out []Detected
-	for _, n := range Names() {
+	for _, n := range staticNames() {
 		if clock, source, ok := all[n].Detect(dir); ok {
 			out = append(out, Detected{Subject: all[n], Clock: clock, Source: source})
 		}
+	}
+	for _, f := range families {
+		out = append(out, f.Detect(dir)...)
 	}
 	return out
 }
@@ -65,14 +85,55 @@ var all = map[string]Builtin{
 	golang.Name: golang.Subject{},
 }
 
-// Lookup returns a built-in subject by name.
-func Lookup(name string) (Builtin, bool) {
-	b, ok := all[name]
-	return b, ok
+var families = []Family{gomodFamily{}}
+
+// gomodFamily adapts the gomod package to the Family interface.
+type gomodFamily struct{}
+
+func (gomodFamily) Prefix() string  { return gomod.Prefix }
+func (gomodFamily) Pattern() string { return gomod.Pattern }
+
+func (gomodFamily) Lookup(name string) (Builtin, bool) {
+	s, ok := gomod.Lookup(name)
+	if !ok {
+		return nil, false
+	}
+	return s, true
 }
 
-// Names lists the built-in subjects.
+func (gomodFamily) Detect(dir string) []Detected {
+	var out []Detected
+	for _, m := range gomod.Detect(dir) {
+		out = append(out, Detected{Subject: m.Subject, Clock: m.Clock, Source: m.Source})
+	}
+	return out
+}
+
+// Lookup returns a built-in subject by name, including family members such
+// as golang-mod-golang.org/x/net.
+func Lookup(name string) (Builtin, bool) {
+	if b, ok := all[name]; ok {
+		return b, true
+	}
+	for _, f := range families {
+		if strings.HasPrefix(name, f.Prefix()) {
+			return f.Lookup(name)
+		}
+	}
+	return nil, false
+}
+
+// Names lists the built-in subjects, with each family shown as its name
+// pattern.
 func Names() []string {
+	names := staticNames()
+	for _, f := range families {
+		names = append(names, f.Pattern())
+	}
+	return names
+}
+
+func staticNames() []string {
 	names := make([]string, 0, len(all))
 	for n := range all {
 		names = append(names, n)
@@ -81,7 +142,8 @@ func Names() []string {
 	return names
 }
 
-// Shapes returns every built-in clock shape.
+// Shapes returns the clock shape of every enumerable built-in subject.
+// Family members are not included; use Lookup for those.
 func Shapes() map[string][]axiom.ClockShape {
 	out := map[string][]axiom.ClockShape{}
 	for n, b := range all {
@@ -93,7 +155,7 @@ func Shapes() map[string][]axiom.ClockShape {
 // Seeds returns the embedded logs of every built-in subject.
 func Seeds() ([][]axiom.Axiom, error) {
 	var out [][]axiom.Axiom
-	for _, n := range Names() {
+	for _, n := range staticNames() {
 		seed, err := all[n].Seed()
 		if err != nil {
 			return nil, err

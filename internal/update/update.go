@@ -30,18 +30,42 @@ import (
 	"github.com/canonical/axiomaton/internal/subjects"
 )
 
-// Verdict is the structured answer of a confirmation agent.
+// Verdict is the structured answer of a confirmation agent. A refusal comes
+// in two kinds: an inaccurate statement, where the agent found what is
+// actually true and offers it as Correction, and an unfounded one, where
+// nothing like the statement holds and Correction is empty.
 type Verdict struct {
-	Confirmed bool   `json:"confirmed" jsonschema:"True only if the statement was verified against a primary source."`
-	Reason    string `json:"reason" jsonschema:"One or two sentences explaining what was checked and the outcome."`
+	Confirmed bool `json:"confirmed" jsonschema:"True only if the statement, exactly as written, was verified against a primary source."`
+	// Correction is the agent's verified rewrite of an inaccurate statement.
+	Correction string `json:"correction,omitempty" jsonschema:"Only when confirmed is false because the statement is close but inaccurate (wrong version, name, scope or an overstated or incomplete claim): the corrected statement that you did verify, as one or two self-contained sentences. Leave empty when confirmed, or when the statement is unfounded and no accurate version of it exists."`
+	Reason     string `json:"reason" jsonschema:"One or two sentences explaining what was checked and the outcome, and for a correction what was wrong with the original."`
+}
+
+// Suggests reports whether the verdict rejects the statement but offers a
+// corrected one.
+func (v Verdict) Suggests() bool {
+	return !v.Confirmed && strings.TrimSpace(v.Correction) != ""
 }
 
 // Proposal is an axiom proposed by the update agent plus its verdict.
 type Proposal struct {
 	Axiom   axiom.Axiom `json:"axiom"`
 	Verdict Verdict     `json:"verdict"`
+	// Original is the statement as the update agent proposed it when Axiom
+	// carries a correction that was confirmed instead.
+	Original *axiom.Axiom `json:"original,omitempty"`
 	// Error records a confirmation failure (the agent could not run).
 	Error string `json:"error,omitempty"`
+}
+
+// Corrected returns the proposal with the verdict's correction in place of
+// the statement, keeping the original for the record.
+func (p Proposal) Corrected() Proposal {
+	orig := p.Axiom
+	fixed := orig
+	fixed.Statement = strings.TrimSpace(p.Verdict.Correction)
+	fixed.Normalise()
+	return Proposal{Axiom: fixed, Original: &orig}
 }
 
 // Updater orchestrates the update and confirmation agents.
@@ -109,16 +133,28 @@ func (u *Updater) Confirm(ctx context.Context, a axiom.Axiom) (Verdict, error) {
 	if v.Reason == "" {
 		v.Reason = text
 	}
+	v.Correction = strings.TrimSpace(v.Correction)
+	if v.Confirmed || v.Correction == a.Statement {
+		v.Correction = ""
+	}
 	return v, nil
 }
 
-// Run proposes and then confirms each proposal in its own container.
+// Run proposes and then confirms each proposal in its own container. When a
+// confirmation agent rejects a statement as inaccurate and offers a
+// correction, the correction is confirmed once more by a fresh agent and,
+// if that succeeds, replaces the proposal; otherwise the correction stays on
+// the verdict as a suggestion for the reviewer.
 func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, string, error) {
 	proposed, summary, err := u.Propose(ctx, existing)
 	if err != nil {
 		return nil, summary, err
 	}
 	u.logf("update agent proposed %d axiom(s)", len(proposed))
+	known := map[string]bool{}
+	for _, a := range existing {
+		known[a.ID] = true
+	}
 	out := make([]Proposal, 0, len(proposed))
 	for i, a := range proposed {
 		u.logf("confirming %d/%d: %s", i+1, len(proposed), oneLine(a.Statement, 100))
@@ -130,13 +166,37 @@ func (u *Updater) Run(ctx context.Context, existing []axiom.Axiom) ([]Proposal, 
 			}
 			p.Error = err.Error()
 			u.logf("confirmation failed: %v", err)
-		} else {
-			p.Verdict = v
-			if v.Confirmed {
-				u.logf("confirmed: %s", oneLine(v.Reason, 160))
-			} else {
-				u.logf("not confirmed: %s", oneLine(v.Reason, 160))
+			out = append(out, p)
+			continue
+		}
+		p.Verdict = v
+		switch {
+		case v.Confirmed:
+			u.logf("confirmed: %s", oneLine(v.Reason, 160))
+		case v.Suggests():
+			u.logf("inaccurate: %s", oneLine(v.Reason, 160))
+			u.logf("suggested instead: %s", oneLine(v.Correction, 160))
+			fixed := p.Corrected()
+			if known[fixed.Axiom.ID] {
+				u.logf("the correction is already in the log; dropping the proposal")
+				continue
 			}
+			v2, err := u.Confirm(ctx, fixed.Axiom)
+			switch {
+			case err != nil && ctx.Err() != nil:
+				return out, summary, err
+			case err != nil:
+				u.logf("confirmation of the correction failed: %v", err)
+			case v2.Confirmed:
+				u.logf("correction confirmed: %s", oneLine(v2.Reason, 160))
+				fixed.Verdict = v2
+				p = fixed
+				known[p.Axiom.ID] = true
+			default:
+				u.logf("correction not confirmed: %s", oneLine(v2.Reason, 160))
+			}
+		default:
+			u.logf("unfounded: %s", oneLine(v.Reason, 160))
 		}
 		out = append(out, p)
 	}
@@ -156,7 +216,9 @@ func Split(props []Proposal) (confirmed []axiom.Axiom, pending []Proposal) {
 }
 
 // Review asks the user about each pending proposal on the terminal and
-// returns the accepted axioms. Answers: y(es), n(o), e(dit statement), q(uit).
+// returns the accepted axioms. Answers: y(es), n(o), e(dit statement),
+// q(uit) and, when the confirmation agent suggested a correction,
+// c(orrection) to accept that instead.
 func Review(pending []Proposal, in io.Reader, out io.Writer, shape []axiom.ClockShape) ([]axiom.Axiom, error) {
 	r := bufio.NewReader(in)
 	var accepted []axiom.Axiom
@@ -165,13 +227,18 @@ func Review(pending []Proposal, in io.Reader, out io.Writer, shape []axiom.Clock
 		if p.Axiom.Source != "" {
 			fmt.Fprintf(out, "  source: %s\n", p.Axiom.Source)
 		}
-		if p.Error != "" {
+		prompt := "Accept? [y/n/e/q] "
+		switch {
+		case p.Error != "":
 			fmt.Fprintf(out, "  confirmation error: %s\n", p.Error)
-		} else {
+		case p.Verdict.Suggests():
+			fmt.Fprintf(out, "  inaccurate: %s\n  suggested instead: %s\n", p.Verdict.Reason, p.Verdict.Correction)
+			prompt = "Accept? [y/n/c=suggestion/e/q] "
+		default:
 			fmt.Fprintf(out, "  not confirmed: %s\n", p.Verdict.Reason)
 		}
 		for {
-			fmt.Fprint(out, "Accept? [y/n/e/q] ")
+			fmt.Fprint(out, prompt)
 			line, err := r.ReadString('\n')
 			if err != nil && line == "" {
 				return accepted, fmt.Errorf("read answer: %w", err)
@@ -179,6 +246,13 @@ func Review(pending []Proposal, in io.Reader, out io.Writer, shape []axiom.Clock
 			switch strings.ToLower(strings.TrimSpace(line)) {
 			case "y", "yes":
 				a := p.Axiom
+				a.By = "user"
+				accepted = append(accepted, a)
+			case "c", "correction", "suggestion":
+				if !p.Verdict.Suggests() {
+					continue
+				}
+				a := p.Corrected().Axiom
 				a.By = "user"
 				accepted = append(accepted, a)
 			case "n", "no":

@@ -52,19 +52,30 @@ func (Subject) Seed() ([]axiom.Axiom, error) {
 // module's go directive, which fixes the language version the code is
 // written against.
 func (Subject) Detect(dir string) (clock []string, source string, ok bool) {
-	path, ok := findUp(dir, "go.mod")
-	if !ok {
-		return nil, "", false
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, "", false
-	}
-	f, err := modfile.ParseLax(path, data, nil)
-	if err != nil || f.Go == nil || f.Go.Version == "" {
+	path, f, ok := ModFile(dir)
+	if !ok || f.Go == nil || f.Go.Version == "" {
 		return nil, "", false
 	}
 	return []string{f.Go.Version}, path, true
+}
+
+// ModFile finds and parses the go.mod that governs dir: the nearest one in
+// dir or its parents, not looking above the repository root. Unknown
+// directives are ignored so a go.mod from a newer toolchain still parses.
+func ModFile(dir string) (path string, f *modfile.File, ok bool) {
+	path, ok = findUp(dir, "go.mod")
+	if !ok {
+		return "", nil, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", nil, false
+	}
+	f, err = modfile.ParseLax(path, data, nil)
+	if err != nil {
+		return "", nil, false
+	}
+	return path, f, true
 }
 
 // findUp returns the nearest file called name in dir or its parents. The
@@ -165,9 +176,18 @@ https://go.dev/dl/) before use. Network access is available.
 Verify the statement against primary sources: the official release notes
 (https://go.dev/doc/go1.N), the language specification, package documentation
 on pkg.go.dev, or by compiling and running a small Go program with the stated
-Go version. Confirm only if the statement is accurate for the stated release
-and is not misleading or materially incomplete. If you cannot verify it, do
-not confirm it.`
+Go version. Confirm only if the statement, exactly as written, is accurate for
+the stated release and is not misleading or materially incomplete. If you
+cannot verify it, do not confirm it.
+
+When you do not confirm, distinguish two cases. If the statement is close but
+inaccurate (wrong release, wrong identifier or package, overstated, missing a
+condition that matters) and you have verified what is actually true, provide
+the corrected statement as the correction: one or two self-contained
+sentences in the same style, true for the stated release, that you would
+confirm yourself. If the statement is unfounded, that is nothing like it is
+true or you could not establish what is true, leave the correction empty and
+say so in the reason.`
 }
 
 func (Subject) ConfirmTask(a axiom.Axiom) string {
@@ -177,8 +197,10 @@ Go release: %s (released %s)
 Statement: %s
 Claimed source: %s
 
-Investigate, then call the submit_answer tool with confirmed true or false
-and a one or two sentence reason citing what you checked.`,
+Investigate, then call the submit_answer tool with confirmed true or false,
+a one or two sentence reason citing what you checked, and, only when the
+statement is inaccurate rather than unfounded, a correction giving the
+verified statement that should replace it.`,
 		a.Clock["version"], a.Time.Format("2006-01-02"), a.Statement, a.Source)
 }
 

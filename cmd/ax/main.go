@@ -55,14 +55,17 @@ Commands:
             restricted to the subject's clock (e.g. golang 1.26.1). Without a
             subject, the default subjects from axiomaton.cnf files are used.
             A built-in subject given without a clock reads the project's
-            version from its own files (golang: the go directive in go.mod).
+            version from its own files (golang: the go directive in go.mod;
+            golang-mod-<module>: that module's require line in go.mod).
   for       Like since, with the cutoff taken from the knowledge cutoff that
             OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
   add       Append an axiom to the nearest writeable axiomlog.
-  update    Run containerised agents to extend the log of a built-in subject.
+  update    Run containerised agents to extend the log of a built-in subject
+            (golang, or golang-mod-<module> for a Go module dependency).
   subjects  List known subjects and where they come from.
   init      Write an axiomaton.cnf for this project listing the built-in
-            subjects detected here (e.g. golang from go.mod).
+            subjects detected here (golang and one golang-mod-<module>
+            subject per direct dependency, from go.mod).
   setup     Write ax.cnf interactively and test the configured models.
 
 Global flags:
@@ -202,7 +205,35 @@ func (a *app) load() (*env, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &env{cfg: cfg, ws: ws, reg: reg, axioms: all}, nil
+	e := &env{cfg: cfg, ws: ws, reg: reg, axioms: all}
+	// Members of built-in families (golang-mod-<module>) cannot be
+	// registered up front; define the shape of every one in play.
+	for _, ref := range ws.DefaultSubjects(true) {
+		e.define(ref.Name)
+	}
+	for _, ax := range all {
+		e.define(ax.Subject)
+	}
+	return e, nil
+}
+
+// define registers the built-in shape for name when it is a built-in
+// subject that no project file has declared. Project declarations win, as
+// they do for enumerable built-ins.
+func (e *env) define(name string) {
+	if _, ok := e.reg.Lookup(name); ok {
+		return
+	}
+	if b, ok := subjects.Lookup(name); ok {
+		_ = e.reg.Define(name, b.Shape())
+	}
+}
+
+// subject resolves a subject named by the user, registering it first when
+// it is a built-in family member.
+func (e *env) subject(name string, values []string) (axiom.Subject, bool) {
+	e.define(name)
+	return e.reg.Resolve(name, values)
 }
 
 func parseDate(s string) (time.Time, error) {
@@ -262,7 +293,7 @@ func (a *app) report(ctx context.Context, since time.Time, args []string, summar
 	var results []query.Result
 	for _, t := range targets {
 		t.Clock = a.detectClock(t)
-		subj, inferred := e.reg.Resolve(t.Name, t.Clock)
+		subj, inferred := e.subject(t.Name, t.Clock)
 		if inferred {
 			a.warnf("subject %q has no declared clock shape; inferred %s from the values given", t.Name, describeShape(subj.Shape))
 		}
@@ -271,7 +302,11 @@ func (a *app) report(ctx context.Context, since time.Time, args []string, summar
 			return err
 		}
 		if len(axiomlog.Filter(e.axioms, t.Name)) == 0 {
-			a.warnf("no axioms known for subject %q", t.Name)
+			if _, builtin := subjects.Lookup(t.Name); builtin {
+				a.warnf("no axioms known for subject %q (run ax update %s)", t.Name, t.Name)
+			} else {
+				a.warnf("no axioms known for subject %q", t.Name)
+			}
 		}
 		r, err := query.Evaluate(ctx, e.axioms, query.Request{Since: since, Subject: subj, Clock: clock}, res)
 		if err != nil {
@@ -385,7 +420,7 @@ func (a *app) add(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	subj, inferred := e.reg.Resolve(name, values)
+	subj, inferred := e.subject(name, values)
 	if inferred {
 		return fmt.Errorf("subject %q has no declared clock shape; declare it under shapes: in %s before adding clocked axioms", name, config.ProjectFile)
 	}
@@ -480,14 +515,25 @@ func (a *app) update(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	fmt.Fprintf(a.stderr, "ax: %d axiom(s) proposed, %d confirmed and appended to %s, %d need review\n", len(props), len(confirmed), target, len(pending))
+	corrected := 0
+	for _, p := range props {
+		if p.Original != nil && p.Verdict.Confirmed {
+			corrected++
+		}
+	}
+	fmt.Fprintf(a.stderr, "ax: %d axiom(s) proposed, %d confirmed (%d after correction) and appended to %s, %d need review\n", len(props), len(confirmed), corrected, target, len(pending))
 	if len(pending) == 0 {
 		return nil
 	}
 	var accepted []axiom.Axiom
 	switch {
 	case *yes:
+		// Unverified either way; the confirmation agent's correction is the
+		// better bet when it judged the proposal inaccurate.
 		for _, p := range pending {
+			if p.Verdict.Suggests() {
+				p = p.Corrected()
+			}
 			ax := p.Axiom
 			ax.By = "user"
 			accepted = append(accepted, ax)
@@ -502,7 +548,7 @@ func (a *app) update(ctx context.Context, args []string) error {
 		if err := update.WritePending(pendingPath, pending); err != nil {
 			return err
 		}
-		a.warnf("stdin is not a terminal; %d unconfirmed axiom(s) written to %s for review (use ax add to record them)", len(pending), pendingPath)
+		a.warnf("stdin is not a terminal; %d unconfirmed axiom(s) written to %s for review (use ax add to record them; suggested corrections are under verdict.correction)", len(pending), pendingPath)
 		return nil
 	}
 	if len(accepted) > 0 {

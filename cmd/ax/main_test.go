@@ -21,6 +21,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/canonical/axiomaton/internal/axiom"
+	"github.com/canonical/axiomaton/internal/axiomlog"
+	"github.com/canonical/axiomaton/internal/subjects"
 )
 
 func TestParseInterleaved(t *testing.T) {
@@ -37,6 +41,17 @@ func TestParseInterleaved(t *testing.T) {
 	if err != nil || *s || strings.Join(pos, ",") != "a,-s,b" {
 		t.Fatalf("terminator: pos=%v s=%v err=%v", pos, *s, err)
 	}
+}
+
+// mustSeed returns the embedded golang log.
+func mustSeed(t *testing.T) []axiom.Axiom {
+	t.Helper()
+	b, _ := subjects.Lookup("golang")
+	seed, err := b.Seed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return seed
 }
 
 func TestCLI(t *testing.T) {
@@ -59,12 +74,24 @@ func TestCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "## golang (version <= 1.26.1)") || !strings.Contains(out, "new(expr)") || strings.Contains(out, "1.27.0") {
+	if !strings.Contains(out, "## golang (version <= 1.26.1)") || !strings.Contains(out, "1.26.0]**") || strings.Contains(out, "1.27.0") {
 		t.Fatalf("since output:\n%s", out)
 	}
-	// Log order, not hash order, within a release.
-	if strings.Index(out, "no longer uses the notion of core types") > strings.Index(out, "testing/synctest package is generally available") {
-		t.Fatalf("expected log order within 1.25.0:\n%s", out)
+	// Log order, not hash order, within a release: the 1.25.0 items appear
+	// in the order the seed log lists them.
+	var seedOrder []string
+	for _, a := range axiomlog.Filter(mustSeed(t), "golang") {
+		if a.Clock["version"] == "1.25.0" {
+			seedOrder = append(seedOrder, a.Statement)
+		}
+	}
+	if len(seedOrder) < 2 {
+		t.Fatalf("seed has %d axioms for 1.25.0", len(seedOrder))
+	}
+	for i := 1; i < len(seedOrder); i++ {
+		if strings.Index(out, seedOrder[i-1]) > strings.Index(out, seedOrder[i]) {
+			t.Fatalf("expected log order within 1.25.0:\n%s", out)
+		}
 	}
 
 	out, _, err = exec("since", "2026-01-01")
@@ -130,7 +157,7 @@ func TestInit(t *testing.T) {
 	repo := filepath.Join(root, "repo")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	os.MkdirAll(filepath.Join(repo, "pkg"), 0o755)
-	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n\ngo 1.26.1\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n\ngo 1.26.1\n\nrequire (\n\tgolang.org/x/net v0.50.0\n\tgithub.com/google/uuid v1.6.0 // indirect\n)\n"), 0o644)
 
 	exec := func(dir string, args ...string) (string, string, error) {
 		var out, errb strings.Builder
@@ -148,11 +175,14 @@ func TestInit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, errOut)
 	}
-	if !strings.Contains(errOut, "golang @ 1.26.1 (from ../go.mod)") || !strings.Contains(errOut, "created "+filepath.Join(repo, "pkg", "axiomlog")) || !strings.Contains(errOut, "run `ax setup`") {
+	if !strings.Contains(errOut, "golang @ 1.26.1 (from ../go.mod)") || !strings.Contains(errOut, "golang-mod-golang.org/x/net @ v0.50.0 (from ../go.mod)") || !strings.Contains(errOut, "created "+filepath.Join(repo, "pkg", "axiomlog")) || !strings.Contains(errOut, "run `ax setup`") {
 		t.Fatalf("init output:\n%s", errOut)
 	}
+	if strings.Contains(errOut, "uuid") {
+		t.Fatalf("indirect dependency listed:\n%s", errOut)
+	}
 	cnf, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf"))
-	if !strings.Contains(string(cnf), "  - golang  # detected: ../go.mod says 1.26.1") {
+	if !strings.Contains(string(cnf), "  - golang  # detected: ../go.mod says 1.26.1") || !strings.Contains(string(cnf), "  - golang-mod-golang.org/x/net  # detected: ../go.mod says v0.50.0") {
 		t.Fatalf("cnf:\n%s", cnf)
 	}
 	if _, _, err := exec(filepath.Join(repo, "pkg"), "init"); err == nil || !strings.Contains(err.Error(), "already exists") {
@@ -163,13 +193,39 @@ func TestInit(t *testing.T) {
 	}
 
 	// Defaults now come from the file, with the clock read from go.mod.
-	out, _, err = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01")
+	out, errOut, err = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01")
 	if err != nil || !strings.Contains(out, "## golang (version <= 1.26.1)") {
 		t.Fatalf("default since: %v\n%s", err, out)
 	}
+	if !strings.Contains(errOut, `no axioms known for subject "golang-mod-golang.org/x/net" (run ax update golang-mod-golang.org/x/net)`) {
+		t.Fatalf("empty module subject should point at update:\n%s", errOut)
+	}
 	out, _, _ = exec(filepath.Join(repo, "pkg"), "subjects")
-	if !strings.Contains(out, "default @ 1.26.1 (detected)") {
+	if !strings.Contains(out, "golang\tshape [version:goversion]") || !strings.Contains(out, "default @ 1.26.1 (detected)") || !strings.Contains(out, "golang-mod-golang.org/x/net\tshape [version:semver]\t0 axiom(s)\tdefault @ v0.50.0 (detected)") {
 		t.Fatalf("subjects:\n%s", out)
+	}
+
+	// Module subjects take the built-in semver shape without declaring one,
+	// and the detected clock bounds the report.
+	if _, errOut, err = exec(filepath.Join(repo, "pkg"), "add", "2026-02-01", "golang-mod-golang.org/x/net", "v0.49.0", "net/http2 gained a Transport.MaxReadFrameSize field."); err != nil || !strings.Contains(errOut, "added") {
+		t.Fatalf("add module axiom: %v %s", err, errOut)
+	}
+	if _, _, err = exec(filepath.Join(repo, "pkg"), "add", "2026-03-01", "golang-mod-golang.org/x/net", "0.51.0", "future change"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = exec(filepath.Join(repo, "pkg"), "add", "2026-03-01", "golang-mod-golang.org/x/net", "banana", "x"); err == nil || !strings.Contains(err.Error(), "not a semantic version") {
+		t.Fatalf("bad module clock: %v", err)
+	}
+	out, _, err = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01")
+	if err != nil || !strings.Contains(out, "## golang-mod-golang.org/x/net (version <= 0.50.0)") || !strings.Contains(out, "MaxReadFrameSize") || strings.Contains(out, "future change") {
+		t.Fatalf("module since: %v\n%s", err, out)
+	}
+	out, _, err = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01", "golang-mod-golang.org/x/net", "0.51.0")
+	if err != nil || !strings.Contains(out, "future change") {
+		t.Fatalf("explicit module clock: %v\n%s", err, out)
+	}
+	if _, _, err = exec(filepath.Join(repo, "pkg"), "update", "golang-mod-nodots"); err == nil || !strings.Contains(err.Error(), "golang-mod-<module path>") {
+		t.Fatalf("update with a bad module path: %v", err)
 	}
 
 	// Bumping go.mod moves the clock without touching the config.

@@ -31,6 +31,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/tool"
 
+	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/update"
 )
 
@@ -55,7 +56,7 @@ const DefaultLeadDays = 274
 // GlobalEpoch is the cutoff of last resort, used when a model has neither a
 // published cutoff nor a release date to estimate from. It predates every
 // axiom in the built-in logs, so everything is reported as new.
-var GlobalEpoch = time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+var GlobalEpoch = axiom.GlobalEpoch
 
 // Record is a remembered cutoff for one model.
 type Record struct {

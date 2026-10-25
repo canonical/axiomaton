@@ -53,12 +53,23 @@ default subjects are declared, nothing is printed and a warning goes to stderr.
 
 Run `ax init` in a project to create its `axiomaton.cnf` (and an empty
 `axiomlog`). Built-in subjects detect themselves: `golang` is listed when a
-`go.mod` is found in the directory or its parents up to the repository root.
-Detected subjects are written without a clock, and a built-in subject named
-without a clock, in the file or on the command line, takes its clock from the
-project at query time (`golang` uses the `go` directive in `go.mod`), so the
-file never goes stale. Give an explicit clock to pin a version instead.
-Further built-in subjects can be named as arguments, e.g. `ax init golang`.
+`go.mod` is found in the directory or its parents up to the repository root,
+and every direct requirement in that `go.mod` adds a
+`golang-mod-<module path>` subject (e.g. `golang-mod-golang.org/x/net`);
+indirect requirements are skipped. Detected subjects are written without a
+clock, and a built-in subject named without a clock, in the file or on the
+command line, takes its clock from the project at query time (`golang` uses
+the `go` directive in `go.mod`; `golang-mod-<module>` uses that module's
+`require` line), so the file never goes stale. Give an explicit clock to pin a
+version instead. Further built-in subjects can be named as arguments, e.g.
+`ax init golang golang-mod-golang.org/x/text`, and dependencies you do not
+want reported on can simply be deleted from the file.
+
+`golang-mod-<module>` subjects are a built-in *family*: any valid module path
+after the prefix is a subject with a `version` clock of kind `semver`, with no
+declaration needed. They ship with no axioms; `ax update
+golang-mod-golang.org/x/net` builds the log for the project (see below), and
+until then `ax since` warns that nothing is known for the subject.
 
 `axiomaton.cnf` files are written in YAML. Each subject is either the compact
 `[name, clock values...]` form or a mapping. Subjects that are not built in need
@@ -147,6 +158,7 @@ The `ax` tool also contains these other commands:
 - `ax for anthropic/claude-sonnet-4.5`
 - `ax add 2026-08-19 golang 1.27.0 "a method declaration may declare its own type parameters."`
 - `ax update golang`
+- `ax update golang-mod-golang.org/x/net`
 - `ax subjects`
 - `ax init`
 - `ax setup`
@@ -155,15 +167,29 @@ The `ax` tool also contains these other commands:
 repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
 repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
-The update command only works for built-in subjects, with golang as the only current
-built-in subject. All subject updates are performed as such, firstly, a containerised
+The update command only works for built-in subjects: `golang`, and
+`golang-mod-<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
 agent is run (using github.com/microsoft/agent-framework-go, running a podman container,
 with tool calls running inside the container via podman exec), to update the axiomlog
-based on go's release notes. Then after the agent has concluded, for each individual
+based on go's release notes. For a module subject the agent takes the release
+list and dates from the module proxy and works out what changed for callers
+from the module's release notes, an API comparison between tags (apidiff) and
+the commit log, starting from the newest release the log already covers, or,
+for an empty log, from releases published since the global epoch
+(2023-08-01). Then after the agent has concluded, for each individual
 axiom added, a new agent, with a new container, is asked to confirm, it. Only axioms
 that are confirmed are added automatically, axioms that are not confirmed require
-user input. On a terminal the user is asked about each one; otherwise they are
-written to `<axiomlog>.pending` for later review, or accepted with `-y`.
+user input. A confirmation agent that rejects a statement says which kind of
+rejection it is: an *inaccurate* statement (wrong release, identifier or scope,
+overstated or incomplete) comes back with a corrected statement the agent did
+verify, while an *unfounded* one comes back with no suggestion. A correction
+is confirmed once more by a fresh agent and, if that succeeds, is appended in
+place of the proposal (the original is kept in the pending record). On a
+terminal the user is asked about each remaining proposal, with `c` accepting
+the suggested correction where there is one; otherwise they are written to
+`<axiomlog>.pending` (suggestions under `verdict.correction`) for later
+review, or accepted with `-y`, which takes the suggestion over the original
+when the agent offered one.
 
 The built-in golang log is embedded from `internal/subjects/golang/axiomlog`;
 maintainers refresh it with `ax update golang -l internal/subjects/golang/axiomlog`.
