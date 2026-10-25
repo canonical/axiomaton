@@ -114,7 +114,7 @@ func TestPrompts(t *testing.T) {
 		}
 	}
 	empty := s.UpdateTask(nil)
-	if !strings.Contains(empty, "holds 0 axioms") || !strings.Contains(empty, "on or after 2023-08-01") || strings.Contains(empty, "newest release it covers") {
+	if !strings.Contains(empty, "holds 0 axioms") || !strings.Contains(empty, "after 2023-08-01, the global epoch") || strings.Contains(empty, "newest release it covers") {
 		t.Fatalf("empty task:\n%s", empty)
 	}
 	existing := []axiom.Axiom{

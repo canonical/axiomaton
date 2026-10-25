@@ -28,14 +28,20 @@ card, and if that fails it estimates the cutoff from the model's OpenRouter
 release date by subtracting the 90th percentile of the release-to-cutoff gaps
 seen among the models that publish both dates, with a warning naming the
 figure. A model with no release date at all
-falls back to the global epoch, 2023-08-01, which predates every
-built-in axiom. Each answer is stored in
+falls back to the global epoch, 2023-08-01. Each answer is stored in
 `$XDG_DATA_HOME/axiomaton/cutoffs.json`, which can be edited by hand, and is
 reused until `-refresh` is given; `--offline` skips the agent.
 
 The result contains axioms whose primary clock is after the cutoff and whose
 sub-clock is at or before the subject clock given (so `go 1.26.1` excludes
 Go 1.27 facts). Axioms without a sub-clock always apply.
+
+The global epoch, 2023-08-01, is a hard floor: anything that became true
+on or before it is assumed to be prior knowledge of every model. A cutoff
+earlier than the epoch (given to `since`, or resolved by `for`) is raised to
+it with a warning, `ax add` refuses a date that is not after it, and the
+update agents are told not to propose axioms on or before it, with the
+propose tool rejecting any that slip through.
 
 A project can have a `axiomaton.cnf` file, which describes the subjects that are
 relevent to that project, `ax` will search the current directory, up to the root
@@ -62,14 +68,18 @@ Run `ax init` in a project to create its `axiomaton.cnf` (and an empty
 `go.mod` is found in the directory or its parents up to the repository root,
 and every direct requirement in that `go.mod` adds a
 `go:<module path>` subject (e.g. `go:golang.org/x/net`);
-indirect requirements are skipped. Detected subjects are written without a
+indirect requirements are skipped. `rust` is listed when a `Cargo.toml` is
+found the same way. Detected subjects are written without a
 clock, and a built-in subject named without a clock, in the file or on the
 command line, takes its clock from the project at query time (`go` uses
 the `go` directive in `go.mod`; `go:<module>` uses that module's
-`require` line), so the file never goes stale. Give an explicit clock to pin a
-version instead. Further built-in subjects can be named as arguments, e.g.
-`ax init go go:golang.org/x/text`, and dependencies you do not
-want reported on can simply be deleted from the file.
+`require` line; `rust` uses the release pinned in `rust-toolchain.toml` or
+`rust-toolchain`, else the package's `rust-version`, following a workspace
+inheritance to the workspace root), so the file never goes stale. A Rust
+project that pins neither is reported without a clock, i.e. every release.
+Give an explicit clock to pin a version instead. Further built-in subjects can
+be named as arguments, e.g. `ax init go go:golang.org/x/text`, and
+dependencies you do not want reported on can simply be deleted from the file.
 
 `go:<module>` subjects are a built-in *family*: any valid module path
 after the prefix is a subject with a `version` clock of kind `semver`, with no
@@ -165,6 +175,7 @@ The `ax` tool also contains these other commands:
 - `ax for anthropic/claude-sonnet-4.5`
 - `ax add 2026-08-19 go 1.27.0 "a method declaration may declare its own type parameters."`
 - `ax update go`
+- `ax update rust`
 - `ax update go:golang.org/x/net`
 - `ax subjects`
 - `ax init`
@@ -174,7 +185,7 @@ The `ax` tool also contains these other commands:
 repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
 repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
-The update command only works for built-in subjects: `go`, and
+The update command only works for built-in subjects: `go`, `rust`, and
 `go:<module path>` for any Go module. All subject updates are performed as such, firstly, a containerised
 agent is run (using github.com/microsoft/agent-framework-go, running a podman container,
 with tool calls running inside the container via podman exec), to update the axiomlog
@@ -203,6 +214,9 @@ when the agent offered one.
 
 The built-in go log is embedded from `internal/subjects/golang/axiomlog`;
 maintainers refresh it with `ax update go -l internal/subjects/golang/axiomlog`.
+The rust log at `internal/subjects/rust/axiomlog` is generated the same way
+with `ax update rust -l internal/subjects/rust/axiomlog`; the agent reads
+RELEASES.md from rust-lang/rust and installs toolchains with rustup.
 
 ## Log format
 

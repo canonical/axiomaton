@@ -60,11 +60,16 @@ func (a *app) init(_ context.Context, args []string) error {
 	for _, d := range subjects.Detect(a.dir) {
 		seen[d.Subject.Name()] = true
 		src := shortenFrom(a.dir, d.Source)
-		entries = append(entries, entry{
+		e := entry{
 			name:    d.Subject.Name(),
 			comment: fmt.Sprintf("detected: %s says %s", src, strings.Join(d.Clock, " ")),
 			summary: fmt.Sprintf("%s @ %s (from %s)", d.Subject.Name(), strings.Join(d.Clock, " "), src),
-		})
+		}
+		if len(d.Clock) == 0 {
+			e.comment = fmt.Sprintf("detected from %s; no version pinned, so every release is reported", src)
+			e.summary = fmt.Sprintf("%s (from %s; no version pinned)", d.Subject.Name(), src)
+		}
+		entries = append(entries, e)
 	}
 	for _, name := range rest {
 		if seen[name] {
@@ -82,8 +87,9 @@ func (a *app) init(_ context.Context, args []string) error {
 	b.WriteString("#\n")
 	b.WriteString("# `ax since <date>` reports what changed for every subject listed here.\n")
 	b.WriteString("# Built-in subjects need no clock: the project's own files are read at\n")
-	b.WriteString("# query time (go uses the go directive in go.mod; go:<module>\n")
-	b.WriteString("# uses that module's require line). Give an explicit clock, e.g.\n")
+	b.WriteString("# query time (go uses the go directive in go.mod; go:<module> uses that\n")
+	b.WriteString("# module's require line; rust uses the pinned toolchain or the package's\n")
+	b.WriteString("# rust-version). Give an explicit clock, e.g.\n")
 	b.WriteString("# [go, 1.26.1], to pin a version instead. Remove any dependency you\n")
 	b.WriteString("# do not want reported on; `ax update <subject>` builds its log.\n")
 	b.WriteString("# Built-in subjects: " + strings.Join(subjects.Names(), ", ") + ".\n")

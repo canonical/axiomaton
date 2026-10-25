@@ -19,13 +19,13 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/mod/modfile"
 
 	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/axiomlog"
+	"github.com/canonical/axiomaton/internal/subjects/detect"
 )
 
 // Name is the subject name.
@@ -63,7 +63,7 @@ func (Subject) Detect(dir string) (clock []string, source string, ok bool) {
 // dir or its parents, not looking above the repository root. Unknown
 // directives are ignored so a go.mod from a newer toolchain still parses.
 func ModFile(dir string) (path string, f *modfile.File, ok bool) {
-	path, ok = findUp(dir, "go.mod")
+	path, ok = detect.FindUp(dir, "go.mod")
 	if !ok {
 		return "", nil, false
 	}
@@ -76,30 +76,6 @@ func ModFile(dir string) (path string, f *modfile.File, ok bool) {
 		return "", nil, false
 	}
 	return path, f, true
-}
-
-// findUp returns the nearest file called name in dir or its parents. The
-// search ends at the first directory holding a .git entry, so a module
-// above the repository is not mistaken for the project's own.
-func findUp(dir, name string) (string, bool) {
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return "", false
-	}
-	for {
-		candidate := filepath.Join(dir, name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, true
-		}
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return "", false
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
 }
 
 func (Subject) UpdateInstructions() string {
@@ -128,7 +104,12 @@ Sources of truth, in order of preference:
 Record each axiom with the propose_axiom tool. Use the release date from the
 release history as the time and the release version (e.g. "1.27.0") as the
 clock value. Set the source to the URL you read it from. Only propose axioms
-you have actually read in a source; never propose from memory alone.`
+you have actually read in a source; never propose from memory alone.
+
+Hard limit: never propose an axiom dated on or before ` + axiom.GlobalEpoch.Format("2006-01-02") + `, the global epoch.
+Everything older is assumed to be prior knowledge of every model, and the
+propose_axiom tool rejects it. Releases before that date are out of scope
+even when the log is empty.`
 }
 
 func (Subject) UpdateTask(existing []axiom.Axiom) string {
@@ -142,7 +123,8 @@ func (Subject) UpdateTask(existing []axiom.Axiom) string {
 
 Your task:
 1. Fetch the Go release history and identify every Go release that is newer
-   than the newest release the log covers (ignore release candidates and
+   than the newest release the log covers and was released after
+   ` + axiom.GlobalEpoch.Format("2006-01-02") + `, the global epoch (ignore release candidates and
    betas). If there are none, say so and stop.
 2. For each such release, read its release notes in full. For each
    foundational change, propose one axiom. Aim for completeness over brevity:

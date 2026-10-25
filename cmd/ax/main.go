@@ -56,16 +56,17 @@ Commands:
             subject, the default subjects from axiomaton.cnf files are used.
             A built-in subject given without a clock reads the project's
             version from its own files (go: the go directive in go.mod;
-            go:<module>: that module's require line in go.mod).
+            go:<module>: that module's require line in go.mod; rust: the
+            pinned toolchain or the rust-version in Cargo.toml).
   for       Like since, with the cutoff taken from the knowledge cutoff that
             OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
   add       Append an axiom to the nearest writeable axiomlog.
   update    Run containerised agents to extend the log of a built-in subject
-            (go, or go:<module> for a Go module dependency).
+            (go, rust, or go:<module> for a Go module dependency).
   subjects  List known subjects and where they come from.
   init      Write an axiomaton.cnf for this project listing the built-in
-            subjects detected here (go and one go:<module>
-            subject per direct dependency, from go.mod).
+            subjects detected here (go and one go:<module> subject per
+            direct dependency, from go.mod; rust from Cargo.toml).
   setup     Write ax.cnf interactively and test the configured models.
 
 Global flags:
@@ -273,6 +274,10 @@ func (a *app) since(ctx context.Context, args []string) error {
 // (name followed by clock values), or for the default subjects when args is
 // empty, optionally summarising the result.
 func (a *app) report(ctx context.Context, since time.Time, args []string, summarise bool) error {
+	if since.Before(axiom.GlobalEpoch) {
+		a.warnf("cutoff %s is before the global epoch %s; everything older is assumed to be prior knowledge, so reporting from the epoch", since.Format("2006-01-02"), axiom.GlobalEpoch.Format("2006-01-02"))
+		since = axiom.GlobalEpoch
+	}
 	e, err := a.load()
 	if err != nil {
 		return err
@@ -414,6 +419,9 @@ func (a *app) add(ctx context.Context, args []string) error {
 	when, err := parseDate(rest[0])
 	if err != nil {
 		return err
+	}
+	if !when.After(axiom.GlobalEpoch) {
+		return fmt.Errorf("%s is not after the global epoch %s; anything that old is assumed to be prior knowledge of every model and is not recorded", rest[0], axiom.GlobalEpoch.Format("2006-01-02"))
 	}
 	name := rest[1]
 	values := rest[2 : len(rest)-1]

@@ -128,6 +128,18 @@ func (f *fakeAgent) Run(_ context.Context, instructions, task string, tools []to
 		if r := call(f.t, tools, "propose_axiom", ProposeInput{Date: "bad", Clock: []string{"1.28.0"}, Statement: "x"}); !strings.Contains(r, "invalid date") {
 			f.t.Fatalf("bad date not rejected: %s", r)
 		}
+		if r := call(f.t, tools, "propose_axiom", ProposeInput{Date: "2023-07-31", Clock: []string{"1.21.0"}, Statement: "old news"}); !strings.Contains(r, "not after the global epoch 2023-08-01") {
+			f.t.Fatalf("pre-epoch proposal not rejected: %s", r)
+		}
+		if r := call(f.t, tools, "propose_axiom", ProposeInput{Date: "2023-08-01", Clock: []string{"1.21.0"}, Statement: "on the epoch"}); !strings.Contains(r, "not after the global epoch") {
+			f.t.Fatalf("epoch day itself is prior knowledge: %s", r)
+		}
+		if r := call(f.t, tools, "propose_axiom", ProposeInput{Date: "2023-08-02", Clock: []string{"1.21.0"}, Statement: "on the epoch", Source: "https://go.dev"}); strings.Contains(r, "epoch") {
+			f.t.Fatalf("the day after the epoch must be accepted: %s", r)
+		}
+		if !strings.Contains(instructions, "Hard limit: never propose an axiom dated on or before 2023-08-01") || !strings.Contains(task, "after\n   2023-08-01, the global epoch") {
+			f.t.Fatalf("prompts lack the epoch limit:\n%s\n%s", instructions, task)
+		}
 		if r := call(f.t, tools, "propose_axiom", ProposeInput{Date: "2027-02-09", Clock: []string{"banana"}, Statement: "x"}); !strings.Contains(r, "not a Go version") {
 			f.t.Fatalf("bad clock not rejected: %s", r)
 		}
@@ -171,12 +183,12 @@ func TestUpdaterRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One update run, four confirmations and two re-confirmations of
+	// One update run, five confirmations and two re-confirmations of
 	// suggested corrections.
-	if summary != "covered 1.28.0" || len(props) != 4 || ag.count() != 7 {
+	if summary != "covered 1.28.0" || len(props) != 5 || ag.count() != 8 {
 		t.Fatalf("props=%d summary=%q runs=%d", len(props), summary, ag.count())
 	}
-	if rt.count() != 7 || rt.peak != 1 {
+	if rt.count() != 8 || rt.peak != 1 {
 		t.Fatalf("expected a fresh container per agent, one at a time, got %d (peak %d)", rt.count(), rt.peak)
 	}
 	for _, c := range rt.started {
@@ -194,7 +206,7 @@ func TestUpdaterRun(t *testing.T) {
 	if props[2].Original == nil || props[2].Original.Statement != "this is nearly true" || props[2].Verdict.Correction != "" || !props[2].Verdict.Confirmed {
 		t.Fatalf("corrected proposal should keep the original: %+v", props[2])
 	}
-	if len(pending) != 2 || pending[0].Axiom.Statement != "this is dubious" || pending[0].Verdict.Suggests() {
+	if len(pending) != 3 || pending[0].Axiom.Statement != "this is dubious" || pending[0].Verdict.Suggests() || pending[2].Axiom.Statement != "on the epoch" {
 		t.Fatalf("pending: %+v", pending)
 	}
 	if p := pending[1]; p.Axiom.Statement != "this is slightly off" || !p.Verdict.Suggests() || p.Verdict.Correction != "this is still off" || p.Original != nil {
@@ -202,7 +214,7 @@ func TestUpdaterRun(t *testing.T) {
 	}
 
 	var out strings.Builder
-	accepted, err := Review(pending, strings.NewReader("c\n?\ne\nedited statement\nc\n"), &out, b.Shape())
+	accepted, err := Review(pending, strings.NewReader("c\n?\ne\nedited statement\nc\nn\n"), &out, b.Shape())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +227,7 @@ func TestUpdaterRun(t *testing.T) {
 	if strings.Count(out.String(), "[y/n/e/q]") < 2 {
 		t.Fatalf("c without a suggestion should re-prompt:\n%s", out.String())
 	}
-	accepted, _ = Review(pending, strings.NewReader("n\nn\n"), &out, b.Shape())
+	accepted, _ = Review(pending, strings.NewReader("n\nn\nn\n"), &out, b.Shape())
 	if len(accepted) != 0 {
 		t.Fatal("declined should not be accepted")
 	}
@@ -248,7 +260,7 @@ func TestCorrectionAlreadyKnown(t *testing.T) {
 			t.Fatalf("known correction should be dropped: %+v", p)
 		}
 	}
-	if len(props) != 3 || ag.count() != 6 {
+	if len(props) != 4 || ag.count() != 7 {
 		t.Fatalf("props=%d runs=%d", len(props), ag.count())
 	}
 }
@@ -293,10 +305,10 @@ func TestParallelConfirmation(t *testing.T) {
 	for _, p := range props {
 		order = append(order, p.Axiom.Statement)
 	}
-	if got := strings.Join(order, "|"); got != "this is true|this is dubious|this is exactly true|this is slightly off" {
+	if got := strings.Join(order, "|"); got != "this is true|this is dubious|this is exactly true|this is slightly off|on the epoch" {
 		t.Fatalf("order: %s", got)
 	}
-	if rt.count() != 7 {
+	if rt.count() != 8 {
 		t.Fatalf("containers: %d", rt.count())
 	}
 

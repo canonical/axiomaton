@@ -109,6 +109,9 @@ func (p *Proposals) Add(in ProposeInput) ProposeOutput {
 	if err != nil {
 		return ProposeOutput{Message: fmt.Sprintf("invalid date %q: use YYYY-MM-DD", in.Date)}
 	}
+	if !t.After(axiom.GlobalEpoch) {
+		return ProposeOutput{Message: fmt.Sprintf("%s is not after the global epoch %s: anything that old is assumed to be prior knowledge of every model and is never recorded; do not propose it", in.Date, axiom.GlobalEpoch.Format("2006-01-02"))}
+	}
 	clock, err := p.subject.Clock(in.Clock)
 	if err != nil {
 		return ProposeOutput{Message: err.Error()}

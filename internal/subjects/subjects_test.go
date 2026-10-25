@@ -26,7 +26,9 @@ func TestSeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(seeds) != 1 || len(seeds[0]) < 20 {
+	// One seed per enumerable built-in, in name order: go then rust (whose
+	// seed is empty until generated).
+	if len(seeds) != 2 || len(seeds[0]) < 20 || len(seeds[1]) != 0 {
 		t.Fatalf("unexpected seeds: %d", len(seeds))
 	}
 	b, ok := Lookup("go")
@@ -45,7 +47,7 @@ func TestSeeds(t *testing.T) {
 }
 
 func TestFamilies(t *testing.T) {
-	if got := strings.Join(Names(), ","); got != "go,go:<module path>" {
+	if got := strings.Join(Names(), ","); got != "go,rust,go:<module path>" {
 		t.Fatalf("names: %s", got)
 	}
 	b, ok := Lookup("go:golang.org/x/net")
@@ -90,5 +92,12 @@ func TestDetect(t *testing.T) {
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n"), 0o644)
 	if d := Detect(repo); len(d) != 0 {
 		t.Fatalf("go.mod without a go directive should not detect: %+v", d)
+	}
+	os.WriteFile(filepath.Join(repo, "Cargo.toml"), []byte("[package]\nname = \"x\"\nrust-version = \"1.80\"\n"), 0o644)
+	if d := Detect(repo); len(d) != 1 || d[0].Subject.Name() != "rust" || d[0].Clock[0] != "1.80" {
+		t.Fatalf("rust: %+v", d)
+	}
+	if b, ok := Lookup("rust"); !ok || b.Shape()[0].Kind != "semver" {
+		t.Fatal("rust lookup")
 	}
 }

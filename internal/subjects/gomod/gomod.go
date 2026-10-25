@@ -155,7 +155,12 @@ Record each axiom with the propose_axiom tool. Use the proxy's "Time" for the
 version (date part, UTC) as the time and the version without its leading "v"
 (e.g. "0.42.0") as the clock value. Set the source to the URL you read it
 from. Only propose axioms you have actually read in a source or verified by
-running code; never propose from memory alone.`, s.Module, escapedPath(s.Module))
+running code; never propose from memory alone.
+
+Hard limit: never propose an axiom dated on or before %[3]s, the global epoch.
+Everything older is assumed to be prior knowledge of every model, and the
+propose_axiom tool rejects it. Releases before that date are out of scope
+even when the log is empty.`, s.Module, escapedPath(s.Module), axiom.GlobalEpoch.Format("2006-01-02"))
 }
 
 // escapedPath is the module path as it appears in proxy URLs.
@@ -178,14 +183,14 @@ func (s Subject) UpdateTask(existing []axiom.Axiom) string {
 
 Your task:
 1. List the module's versions from the proxy and identify every tagged
-   release that is newer than the newest release the log covers. Ignore
+   release that is newer than the newest release the log covers and was
+   published after ` + axiom.GlobalEpoch.Format("2006-01-02") + `, the global epoch. Ignore
    pre-releases (such as -rc or -beta) and pseudo-versions unless the module
    has no tagged releases at all, in which case say so and stop.`)
 	if latest == "" {
-		fmt.Fprintf(&b, `
-   The log is empty, so cover the releases published on or after %s; nothing
-   older can appear in an answer. If that leaves more than about twenty
-   releases, cover the newest twenty.`, axiom.GlobalEpoch.Format("2006-01-02"))
+		b.WriteString(`
+   The log is empty; if that leaves more than about twenty releases, cover
+   the newest twenty.`)
 	}
 	b.WriteString(`
    If there is nothing to cover, say so and stop.

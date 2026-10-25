@@ -1,0 +1,2 @@
+# Built-in axioms for the Rust programming language. Append-only JSON lines.
+# Regenerate with: ax update rust -l internal/subjects/rust/axiomlog

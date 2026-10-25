@@ -123,11 +123,23 @@ func TestCLI(t *testing.T) {
 	if err != nil || !strings.Contains(errOut, "already recorded") {
 		t.Fatalf("duplicate add: %v %s", err, errOut)
 	}
-	if _, _, err = exec("add", "2026-09-01", "rust", "1.80", "x"); err == nil || !strings.Contains(err.Error(), "no declared clock shape") {
+	if _, _, err = exec("add", "2026-09-01", "zig", "0.14", "x"); err == nil || !strings.Contains(err.Error(), "no declared clock shape") {
 		t.Fatalf("undeclared subject add should fail: %v", err)
 	}
 	if _, _, err = exec("add", "2026-09-01", "svc", "banana", "x"); err == nil {
 		t.Fatal("bad clock should fail")
+	}
+	if _, _, err = exec("add", "2023-08-01", "svc", "2.4.0", "ancient"); err == nil || !strings.Contains(err.Error(), "not after the global epoch 2023-08-01") {
+		t.Fatalf("pre-epoch add should fail: %v", err)
+	}
+	if _, _, err = exec("add", "2023-08-02", "svc", "2.4.0", "day after the epoch"); err != nil {
+		t.Fatalf("day after the epoch add: %v", err)
+	}
+
+	// A cutoff before the epoch is raised to it with a warning.
+	out, errOut, err = exec("since", "2001-01-01", "svc", "2.4.0")
+	if err != nil || !strings.Contains(errOut, "cutoff 2001-01-01 is before the global epoch 2023-08-01") || !strings.Contains(out, "svc exposes a v2 API") || !strings.Contains(out, "day after the epoch") {
+		t.Fatalf("clamped since: %v\n%s\n%s", err, out, errOut)
 	}
 
 	out, _, err = exec("since", "2026-01-01", "svc", "2.4.0")
@@ -140,7 +152,7 @@ func TestCLI(t *testing.T) {
 	}
 
 	out, errOut, err = exec("subjects")
-	if err != nil || !strings.Contains(out, "go\tshape [version:goversion]") || !strings.Contains(out, "svc\tshape [version:semver]\t1 axiom(s)\tdefault @ 2.3.0") {
+	if err != nil || !strings.Contains(out, "go\tshape [version:goversion]") || !strings.Contains(out, "svc\tshape [version:semver]\t2 axiom(s)\tdefault @ 2.3.0") {
 		t.Fatalf("subjects: %v\n%s\n%s", err, out, errOut)
 	}
 
@@ -156,8 +168,8 @@ func TestCLI(t *testing.T) {
 	if err := run(context.Background(), []string{"bogus"}, &out2, &err2); err == nil {
 		t.Fatal("unknown command should fail")
 	}
-	if _, _, err := exec("update", "rust"); err == nil || !strings.Contains(err.Error(), "built-in") {
-		t.Fatalf("update rust: %v", err)
+	if _, _, err := exec("update", "zig"); err == nil || !strings.Contains(err.Error(), "built-in") {
+		t.Fatalf("update zig: %v", err)
 	}
 }
 
@@ -200,8 +212,8 @@ func TestInit(t *testing.T) {
 	if _, _, err := exec(filepath.Join(repo, "pkg"), "init"); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("second init: %v", err)
 	}
-	if _, _, err := exec(filepath.Join(repo, "pkg"), "init", "-force", "rust"); err == nil || !strings.Contains(err.Error(), "not a built-in subject") {
-		t.Fatalf("init rust: %v", err)
+	if _, _, err := exec(filepath.Join(repo, "pkg"), "init", "-force", "zig"); err == nil || !strings.Contains(err.Error(), "not a built-in subject") {
+		t.Fatalf("init zig: %v", err)
 	}
 
 	// Defaults now come from the file, with the clock read from go.mod.
@@ -263,6 +275,40 @@ func TestInit(t *testing.T) {
 	_, errOut, err = exec(other, "init")
 	if err != nil || !strings.Contains(errOut, "no built-in subject detected") {
 		t.Fatalf("empty init: %v %s", err, errOut)
+	}
+
+	// A Rust crate: detected from Cargo.toml, clocked by rust-version, or
+	// unclocked when nothing is pinned.
+	crate := filepath.Join(root, "crate")
+	os.MkdirAll(filepath.Join(crate, ".git"), 0o755)
+	os.WriteFile(filepath.Join(crate, "Cargo.toml"), []byte("[package]\nname = \"c\"\nrust-version = \"1.80\"\n"), 0o644)
+	_, errOut, err = exec(crate, "init")
+	if err != nil || !strings.Contains(errOut, "rust @ 1.80 (from Cargo.toml)") {
+		t.Fatalf("rust init: %v %s", err, errOut)
+	}
+	out, errOut, err = exec(crate, "since", "2025-08-01")
+	if err != nil || !strings.Contains(errOut, `no axioms known for subject "rust" (run ax update rust)`) || strings.Contains(out, "## rust") {
+		t.Fatalf("rust since: %v\n%s\n%s", err, out, errOut)
+	}
+	if _, _, err = exec(crate, "add", "2026-01-15", "rust", "1.90.0", "rust fact"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = exec(crate, "since", "2025-08-01")
+	if strings.Contains(out, "rust fact") {
+		t.Fatalf("1.90.0 axiom must not apply at rust-version 1.80:\n%s", out)
+	}
+	os.WriteFile(filepath.Join(crate, "Cargo.toml"), []byte("[package]\nname = \"c\"\n"), 0o644)
+	out, _, _ = exec(crate, "since", "2025-08-01")
+	if !strings.Contains(out, "## rust\n") || !strings.Contains(out, "- **[1.90.0]** rust fact") {
+		t.Fatalf("unpinned rust is unconstrained:\n%s", out)
+	}
+	_, errOut, err = exec(crate, "init", "-force")
+	if err != nil || !strings.Contains(errOut, "rust (from Cargo.toml; no version pinned)") {
+		t.Fatalf("unpinned init: %v %s", err, errOut)
+	}
+	cnf, _ = os.ReadFile(filepath.Join(crate, "axiomaton.cnf"))
+	if !strings.Contains(string(cnf), "  - rust  # detected from Cargo.toml; no version pinned, so every release is reported") {
+		t.Fatalf("cnf:\n%s", cnf)
 	}
 	_, errOut, err = exec(other, "init", "-force", "go")
 	if err != nil || !strings.Contains(errOut, "ax:   go") {

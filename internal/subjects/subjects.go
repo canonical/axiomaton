@@ -22,6 +22,7 @@ import (
 	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/subjects/golang"
 	"github.com/canonical/axiomaton/internal/subjects/gomod"
+	"github.com/canonical/axiomaton/internal/subjects/rust"
 )
 
 // Builtin is a subject ax knows how to update by itself.
@@ -83,6 +84,7 @@ func Detect(dir string) []Detected {
 
 var all = map[string]Builtin{
 	golang.Name: golang.Subject{},
+	rust.Name:   rust.Subject{},
 }
 
 var families = []Family{gomodFamily{}}
