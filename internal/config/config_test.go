@@ -188,6 +188,12 @@ func TestRenderRoundTrip(t *testing.T) {
 	u.Models[RoleSummary] = Model{Model: "7", Provider: "local"}
 	u.Search.MinSimilarity = 0.4
 	u.Update.Image = "docker.io/library/ubuntu:24.04"
+	u.Sync.File = "CLAUDE.local.md"
+	u.Sync.Model = "openai/gpt-6-luna-pro"
+	u.Sync.Projects = map[string]SyncProject{
+		"/home/me/proj: odd": {File: "AGENTS.override.md", Since: "2025-06-01"},
+		"/home/me/other":     {Model: "gpt-5-mini"},
+	}
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ax.cnf")
@@ -219,6 +225,25 @@ func TestRenderRoundTrip(t *testing.T) {
 	}
 	if _, err := back.Resolve(RoleRerank); !errors.Is(err, ErrNotConfigured) {
 		t.Fatalf("rerank: %v", err)
+	}
+	if back.Sync.File != "CLAUDE.local.md" || back.Sync.Model != "openai/gpt-6-luna-pro" || back.Sync.Since != "" || len(back.Sync.Projects) != 2 ||
+		back.Sync.Projects["/home/me/proj: odd"] != (SyncProject{File: "AGENTS.override.md", Since: "2025-06-01"}) || back.Sync.Projects["/home/me/other"] != (SyncProject{Model: "gpt-5-mini"}) {
+		t.Fatalf("sync: %+v", back.Sync)
+	}
+	if v, isDate, ok := back.Sync.Projects["/home/me/proj: odd"].Cutoff(); v != "2025-06-01" || !isDate || !ok {
+		t.Fatal("Cutoff date")
+	}
+	if v, isDate, ok := (SyncProject{Model: "m"}).Cutoff(); v != "m" || isDate || !ok {
+		t.Fatal("Cutoff model")
+	}
+	if _, _, ok := (SyncProject{}).Cutoff(); ok {
+		t.Fatal("Cutoff empty")
+	}
+	for _, bad := range []string{"sync:\n  model: m\n  since: 2025-01-01\n", "sync:\n  since: yesterday\n", "sync:\n  projects:\n    /p: {model: m, since: 2025-01-01}\n"} {
+		os.WriteFile(path, []byte(bad), 0o644)
+		if _, err := LoadUser(path); err == nil {
+			t.Fatalf("%q should not load", bad)
+		}
 	}
 
 	// Without an inline key the file is world readable.

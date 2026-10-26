@@ -206,6 +206,10 @@ update:
 proxy:
   disabled: false                   # containers have no network except the caching proxy
   max_object_mb: 1024
+sync:
+  file: CLAUDE.local.md             # defaults for ax sync in projects it has not seen
+  model: openai/gpt-6-luna-pro      # or since: 2025-06-01
+  projects: {}                      # filled in by ax sync, one entry per project
 ```
 
 Requests that fail with 429, 5xx or a dropped connection are retried with
@@ -231,6 +235,7 @@ The `ax` tool also contains these other commands:
 - `ax subjects`
 - `ax init`
 - `ax setup`
+- `ax sync openai/gpt-6-luna-pro` (then just `ax sync`)
 
 `add` and `update` append to the nearest writeable `axiomlog` inside the
 repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
@@ -312,6 +317,51 @@ rockcraft, packing small rocks. The shipped
 module logs live under `internal/subjects/gomod/seeds/<module path>/axiomlog`,
 e.g. `ax update go:golang.org/x/net -l internal/subjects/gomod/seeds/golang.org/x/net/axiomlog`;
 adding a directory with an `axiomlog` there ships another module.
+
+### Keeping an agent context file current
+
+`ax sync` writes the report that `ax since` or `ax for` would print into an
+agent context file in the project, so the agent working there always has
+the changes since its own knowledge cutoff in front of it. The first run in
+a project asks two things, or takes them from flags, and remembers both in
+`ax.cnf` under `sync.projects` keyed by the project directory, so every
+later run is just `ax sync`:
+
+- what to report since: an OpenRouter model id (its knowledge cutoff is
+  looked up as `ax for` does) or a date, given as the argument;
+- which file to write: `-agent claude` (CLAUDE.local.md), `codex`
+  (AGENTS.override.md), `gemini` (GEMINI.md), `copilot`
+  (.github/copilot-instructions.md), or `-file <path>` relative to the
+  project.
+
+```
+ax sync openai/gpt-6-luna-pro -agent claude   # first time
+ax sync                                       # from then on
+ax sync 2025-06-01                            # switch this project to a date
+```
+
+The report goes between a `# Axiom changes` heading and an
+`**end of axiom changes**` line; anything else in the file is left alone, and
+a file without the block gets it appended. `-s` summarises the report with
+the summary model and `-refresh` refetches the model catalogue.
+
+A context file is personal to a checkout and should not be committed, so
+`ax sync` refuses to write one that git would pick up: inside a repository
+the file must be ignored. When it is not, the command offers to add it to
+the repository's `.gitignore` (`-y` accepts), and a file already tracked by
+git is refused outright. Files outside any repository need nothing.
+
+`sync.file`, `sync.model` or `sync.since` in `ax.cnf` set defaults for
+projects that have never been synced, so a user who always works with the
+same agent and model never gets asked:
+
+```yaml
+sync:
+  file: CLAUDE.local.md
+  model: openai/gpt-6-luna-pro      # or since: 2025-06-01
+  projects:
+    /home/me/src/juju: {file: CLAUDE.local.md, since: 2025-06-01}
+```
 
 ### Custom subjects
 

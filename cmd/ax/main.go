@@ -52,6 +52,7 @@ Usage:
   ax [global flags] subjects
   ax [global flags] init [built-in subject...]
   ax [global flags] setup
+  ax [global flags] sync [model | date]
 
 Commands:
   since     Render the axioms for a subject that became true after <date>,
@@ -88,6 +89,13 @@ Commands:
   setup     Write ax.cnf interactively and test the configured models, or
             update an existing one: value flags change only the fields
             they name, and the prompts offer the current values.
+  sync      Write the output of since or for into an agent context file in
+            this project (CLAUDE.local.md for claude, or any file given),
+            between a "# Axiom changes" heading and an
+            "**end of axiom changes**" line. The model or date and the
+            file are asked once and remembered per project in ax.cnf,
+            whose sync section can also hold defaults for new projects.
+            The file must be outside git or ignored by it.
 
 Global flags:
 `
@@ -161,6 +169,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return a.init(ctx, rest[1:])
 	case "setup":
 		return a.setup(ctx, rest[1:])
+	case "sync":
+		return a.sync(ctx, rest[1:])
 	case "help", "-h", "--help":
 		fs.Usage()
 		return flag.ErrHelp
@@ -305,17 +315,28 @@ func (a *app) since(ctx context.Context, args []string) error {
 	return a.report(ctx, since, rest[1:], *summarise)
 }
 
-// report renders what changed after since for the subject named in args
-// (name followed by clock values), or for the default subjects when args is
-// empty, optionally summarising the result.
+// report writes what changed after since to standard output; see changes.
 func (a *app) report(ctx context.Context, since time.Time, args []string, summarise bool) error {
+	md, err := a.changes(ctx, since, args, summarise)
+	if err != nil || md == "" {
+		return err
+	}
+	_, err = io.WriteString(a.stdout, md)
+	return err
+}
+
+// changes renders what changed after since for the subject named in args
+// (name followed by clock values), or for the default subjects when args is
+// empty, optionally summarising the result. It returns "" with a warning
+// when there are no default subjects.
+func (a *app) changes(ctx context.Context, since time.Time, args []string, summarise bool) (string, error) {
 	if since.Before(axiom.GlobalEpoch) {
 		a.warnf("cutoff %s is before the global epoch %s; everything older is assumed to be prior knowledge, so reporting from the epoch", since.Format("2006-01-02"), axiom.GlobalEpoch.Format("2006-01-02"))
 		since = axiom.GlobalEpoch
 	}
 	e, err := a.load()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var targets []config.SubjectRef
@@ -325,7 +346,7 @@ func (a *app) report(ctx context.Context, since time.Time, args []string, summar
 		targets = e.ws.DefaultSubjects(a.global)
 		if len(targets) == 0 {
 			a.warnf("no default subjects: add an %s with a subjects list, or name a subject explicitly", config.ProjectFile)
-			return nil
+			return "", nil
 		}
 	}
 
@@ -339,7 +360,7 @@ func (a *app) report(ctx context.Context, since time.Time, args []string, summar
 		}
 		clock, err := subj.Clock(t.Clock)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if len(axiomlog.Filter(e.axioms, t.Name)) == 0 {
 			if _, builtin := subjects.Lookup(t.Name); builtin {
@@ -350,7 +371,7 @@ func (a *app) report(ctx context.Context, since time.Time, args []string, summar
 		}
 		r, err := query.Evaluate(ctx, e.axioms, query.Request{Since: since, Subject: subj, Clock: clock}, res)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if !r.Reportable() {
 			a.logf("nothing to report for subject %q; omitted", t.Name)
@@ -361,17 +382,16 @@ func (a *app) report(ctx context.Context, since time.Time, args []string, summar
 	if summarise {
 		ep, err := e.cfg.Resolve(config.RoleSummary)
 		if err != nil {
-			return fmt.Errorf("-s: %w", err)
+			return "", fmt.Errorf("-s: %w", err)
 		}
 		a.logf("summarising with %s (budget %d tokens)", ep.Model, e.cfg.SummaryBudget)
 		md, err = a.client(e.cfg, ep).Summarise(ctx, md, e.cfg.SummaryBudget)
 		if err != nil {
-			return err
+			return "", err
 		}
 		md += "\n"
 	}
-	_, err = io.WriteString(a.stdout, md)
-	return err
+	return md, nil
 }
 
 // detectClock fills in the clock of a built-in subject referenced without

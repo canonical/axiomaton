@@ -114,6 +114,35 @@ func Render(u User, now time.Time) []byte {
 	b.WriteString("  # SSH cannot leave. Disabling it gives containers podman's default network.\n")
 	fmt.Fprintf(&b, "  disabled: %v\n", u.Proxy.Disabled)
 	fmt.Fprintf(&b, "  max_object_mb: %d\n", u.Proxy.MaxObjectMB)
+	b.WriteString("sync:\n")
+	b.WriteString("  # ax sync writes the changes since a cutoff into an agent context file\n")
+	b.WriteString("  # in the project. Defaults for projects it has not seen; each project's\n")
+	b.WriteString("  # own answers are remembered under projects.\n")
+	fmt.Fprintf(&b, "  file: %s  # context file relative to the project, e.g. CLAUDE.local.md\n", yamlScalar(u.Sync.File))
+	fmt.Fprintf(&b, "  model: %s  # report since this model's knowledge cutoff, or\n", yamlScalar(u.Sync.Model))
+	fmt.Fprintf(&b, "  since: %s  # since this date (YYYY-MM-DD)\n", yamlScalar(u.Sync.Since))
+	if len(u.Sync.Projects) > 0 {
+		b.WriteString("  projects:\n")
+		dirs := make([]string, 0, len(u.Sync.Projects))
+		for d := range u.Sync.Projects {
+			dirs = append(dirs, d)
+		}
+		sort.Strings(dirs)
+		for _, d := range dirs {
+			p := u.Sync.Projects[d]
+			var fields []string
+			if p.File != "" {
+				fields = append(fields, "file: "+yamlScalar(p.File))
+			}
+			if p.Model != "" {
+				fields = append(fields, "model: "+yamlScalar(p.Model))
+			}
+			if p.Since != "" {
+				fields = append(fields, "since: "+yamlScalar(p.Since))
+			}
+			fmt.Fprintf(&b, "    %s: {%s}\n", yamlScalar(d), strings.Join(fields, ", "))
+		}
+	}
 	return b.Bytes()
 }
 

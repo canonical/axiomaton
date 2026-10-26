@@ -116,6 +116,42 @@ type Retry struct {
 func (r Retry) Initial() time.Duration { return time.Duration(r.InitialBackoff * float64(time.Second)) }
 func (r Retry) Max() time.Duration     { return time.Duration(r.MaxBackoff * float64(time.Second)) }
 
+// Sync configures ax sync, which keeps an agent context file in a project
+// up to date with the output of ax since or ax for.
+type Sync struct {
+	// File is the context file to write in a project that has no entry
+	// under Projects yet, relative to the project directory, for example
+	// CLAUDE.local.md.
+	File string `yaml:"file,omitempty"`
+	// Model is the OpenRouter model whose knowledge cutoff is used for
+	// projects that have no entry yet.
+	Model string `yaml:"model,omitempty"`
+	// Since is a fixed cutoff date (YYYY-MM-DD) used instead of Model.
+	Since string `yaml:"since,omitempty"`
+	// Projects remembers each project's answers, keyed by its absolute
+	// directory, so later runs need no arguments.
+	Projects map[string]SyncProject `yaml:"projects,omitempty"`
+}
+
+// SyncProject is what ax sync remembered for one project.
+type SyncProject struct {
+	File  string `yaml:"file,omitempty"`
+	Model string `yaml:"model,omitempty"`
+	Since string `yaml:"since,omitempty"`
+}
+
+// Cutoff returns the model or the date the project reports from, with
+// which one it is. ok is false when neither is set.
+func (s SyncProject) Cutoff() (value string, isDate, ok bool) {
+	switch {
+	case s.Since != "":
+		return s.Since, true, true
+	case s.Model != "":
+		return s.Model, false, true
+	}
+	return "", false, false
+}
+
 // User is the parsed ax.cnf.
 type User struct {
 	Providers     map[string]Provider `yaml:"providers"`
@@ -125,6 +161,7 @@ type User struct {
 	Retry         Retry               `yaml:"retry"`
 	Update        Update              `yaml:"update"`
 	Proxy         Proxy               `yaml:"proxy"`
+	Sync          Sync                `yaml:"sync"`
 
 	// Path is where the config was read from, or empty if defaults are in use.
 	Path string `yaml:"-"`
@@ -253,9 +290,32 @@ func (u *User) merge(o User) {
 	if o.Update.ExecTimeout > 0 {
 		u.Update.ExecTimeout = o.Update.ExecTimeout
 	}
+	if o.Sync.File != "" {
+		u.Sync.File = o.Sync.File
+	}
+	if o.Sync.Model != "" {
+		u.Sync.Model = o.Sync.Model
+	}
+	if o.Sync.Since != "" {
+		u.Sync.Since = o.Sync.Since
+	}
+	if len(o.Sync.Projects) > 0 {
+		if u.Sync.Projects == nil {
+			u.Sync.Projects = map[string]SyncProject{}
+		}
+		maps.Copy(u.Sync.Projects, o.Sync.Projects)
+	}
 }
 
 func (u User) validate() error {
+	if err := validateCutoff("sync", u.Sync.Model, u.Sync.Since); err != nil {
+		return err
+	}
+	for dir, p := range u.Sync.Projects {
+		if err := validateCutoff("sync.projects "+dir, p.Model, p.Since); err != nil {
+			return err
+		}
+	}
 	for role := range u.Models {
 		switch role {
 		case RoleEmbedding, RoleRerank, RoleDecision, RoleSummary, RoleAgent:
@@ -333,4 +393,18 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// validateCutoff checks that a sync entry names a model or a date, not
+// both, and that the date parses.
+func validateCutoff(where, model, since string) error {
+	if model != "" && since != "" {
+		return fmt.Errorf("%s: give model or since, not both", where)
+	}
+	if since != "" {
+		if _, err := time.Parse("2006-01-02", since); err != nil {
+			return fmt.Errorf("%s: since %q is not a date (use YYYY-MM-DD)", where, since)
+		}
+	}
+	return nil
 }

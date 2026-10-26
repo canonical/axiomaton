@@ -58,24 +58,31 @@ func (a *app) forCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	catalogue, err := a.modelCatalogue(ctx, cfg, *refresh)
+	date, err := a.modelCutoff(ctx, cfg, rest[0], *refresh)
 	if err != nil {
 		return err
 	}
-	m, date, err := findCutoff(catalogue, rest[0])
+	return a.report(ctx, date, rest[1:], *summarise)
+}
+
+// modelCutoff finds the knowledge cutoff of the named model: from the
+// catalogue, from a stored answer, from a sandboxed search, or estimated
+// from the release date.
+func (a *app) modelCutoff(ctx context.Context, cfg config.User, name string, refresh bool) (time.Time, error) {
+	catalogue, err := a.modelCatalogue(ctx, cfg, refresh)
+	if err != nil {
+		return time.Time{}, err
+	}
+	m, date, err := findCutoff(catalogue, name)
 	var missing *noCutoffError
 	switch {
 	case errors.As(err, &missing):
-		date, err = a.resolveMissingCutoff(ctx, cfg, catalogue, m, *refresh)
-		if err != nil {
-			return err
-		}
+		return a.resolveMissingCutoff(ctx, cfg, catalogue, m, refresh)
 	case err != nil:
-		return err
-	default:
-		fmt.Fprintf(a.stderr, "ax: %s (%s) knowledge cutoff %s\n", m.ID, m.Name, date.Format("2006-01-02"))
+		return time.Time{}, err
 	}
-	return a.report(ctx, date, rest[1:], *summarise)
+	fmt.Fprintf(a.stderr, "ax: %s (%s) knowledge cutoff %s\n", m.ID, m.Name, date.Format("2006-01-02"))
+	return date, nil
 }
 
 // research looks a cutoff up with a sandboxed agent. It is a variable so
