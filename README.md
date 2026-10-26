@@ -124,27 +124,26 @@ or to the user wide log outside any project.
 
 `ax.cnf` names the models for each role. A minimal file:
 
-```yaml
-providers:
-  openrouter:
-    api_key_env: OPENROUTER_API_KEY
+```
+providers.openrouter.api_key_env: "OPENROUTER_API_KEY"
 models:
-  embedding: {model: perplexity/pplx-embed-v1-4b}
-  decision:  {model: typesafe/jev-1.13}
-  summary:   {model: openai/gpt-oss-120b}
-  agent:     {model: openai/gpt-6-luna-pro}
+    embedding: {model: "perplexity/pplx-embed-v1-4b"}
+    decision: {model: "typesafe/jev-1.13"}
+    summary: {model: "openai/gpt-oss-120b"}
+    agent: {model: "openai/gpt-6-luna-pro"}
 ```
 
 `axiomaton.cnf` lists a project's subjects. Built-in subjects need only a
 name; others declare a clock shape:
 
-```yaml
-subjects:
-  - go                                  # clock read from go.mod; pin with [go, 1.26.1]
-  - name: myservice
-    clock: [2.3.0]
-    shape: [{name: version, kind: semver}]
 ```
+subjects:
+    - "go"  # clock read from go.mod; pin with ["go", "1.26.1"]
+    - {name: "myservice", clock: ["2.3.0"], shape: [{name: "version", kind: "semver"}]}
+```
+
+Both files use the [cnf](https://github.com/canonical/cnf) format: strings
+are quoted, and `a.b: 1` is shorthand for a nested map.
 
 ## Further reading
 

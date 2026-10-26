@@ -30,15 +30,14 @@ func TestLoadUser(t *testing.T) {
 	path := filepath.Join(dir, "ax.cnf")
 	os.WriteFile(path, []byte(`
 providers:
-  openrouter:
-    api_key: sk-test
+    openrouter:
+        api_key: "sk-test"
 models:
-  embedding: {model: openai/text-embedding-3-small}
-  decision: {model: typesafe/jev-1.13}
-  summary: {provider: local, model: llama, base_url: http://localhost:1234/v1, api_key: x}
+    embedding: {model: "openai/text-embedding-3-small"}
+    decision: {model: "typesafe/jev-1.13"}
+    summary: {provider: "local", model: "llama", base_url: "http://localhost:1234/v1", api_key: "x"}
 summary_budget: 800
-search:
-  candidates: 3
+search.candidates: 3
 `), 0o644)
 	cfg, err := LoadUser(path)
 	if err != nil {
@@ -64,7 +63,7 @@ search:
 	if _, err := LoadUser(filepath.Join(dir, "missing")); err != nil {
 		t.Fatalf("missing config should use defaults: %v", err)
 	}
-	os.WriteFile(path, []byte("models:\n  bogus: {model: x}\n"), 0o644)
+	os.WriteFile(path, []byte("models:\n    bogus: {model: \"x\"}\n"), 0o644)
 	if _, err := LoadUser(path); err == nil {
 		t.Fatal("unknown role should fail")
 	}
@@ -89,15 +88,12 @@ func TestLoadProject(t *testing.T) {
 	path := filepath.Join(dir, ProjectFile)
 	os.WriteFile(path, []byte(`
 subjects:
-  - [go, 1.26.1]
-  - name: svc
-    clock: [2.3.0]
-    shape:
-      - {name: version, kind: semver}
-  - plain
+    - ["go", "1.26.1"]
+    - {name: "svc", clock: ["2.3.0"], shape: [{name: "version", kind: "semver"}]}
+    - "plain"
 shapes:
-  juju:
-    - {name: commit, kind: git, repo: ../juju}
+    juju:
+        - {name: "commit", kind: "git", repo: "../juju"}
 `), 0o644)
 	p, err := LoadProject(path)
 	if err != nil {
@@ -130,21 +126,24 @@ func TestLoadProjectUpdate(t *testing.T) {
 	path := filepath.Join(dir, ProjectFile)
 	os.WriteFile(path, []byte(`
 subjects:
-  - name: juju
-    clock: [3.6.4]
-    shape: [{name: version, kind: semver}]
+    ---
+    name: "juju"
+    clock: ["3.6.4"]
+    shape: [{name: "version", kind: "semver"}]
     update:
-      about: Juju, the orchestration engine.
-      sources:
-        - https://github.com/juju/juju/releases
-        - ../juju
-        - /abs/checkout
-      setup: snap install juju --classic
-      clock: the release without v
-      verify: bootstrap localhost
-      vm: true
-  - name: plain
-    shape: [{name: version, kind: semver}]
+        about: "Juju, the orchestration engine."
+        sources:
+            - "https://github.com/juju/juju/releases"
+            - "../juju"
+            - "/abs/checkout"
+        setup: "snap install juju --classic"
+        clock: "the release without v"
+        verify: "bootstrap localhost"
+        vm: true
+    ---
+    name: "plain"
+    shape: [{name: "version", kind: "semver"}]
+    ---
 `), 0o644)
 	p, err := LoadProject(path)
 	if err != nil {
@@ -160,17 +159,24 @@ subjects:
 	if p.Subjects[1].Update != nil {
 		t.Fatal("plain has no brief")
 	}
-	for _, tc := range []struct{ yaml, want string }{
-		{"subjects:\n  - name: x\n    update:\n      sources: [https://a]\n", "update.about is required"},
-		{"subjects:\n  - name: x\n    update:\n      about: a\n", "update.sources is required"},
-		{"subjects:\n  - name: x\n    update:\n      about: a\n      sources: [git@github.com:a/b.git]\n", "uses SSH"},
-		{"subjects:\n  - name: x\n    update:\n      about: a\n      sources: [ssh://git@github.com/a/b]\n", "uses SSH"},
-		{"subjects:\n  - name: x\n    update:\n      about: a\n      sources: [http://a]\n", "plain http"},
-		{"subjects:\n  - name: x\n    update:\n      about: a\n      sources: ['']\n", "empty entry"},
+	for _, tc := range []struct{ cnf, want string }{
+		{"subjects:\n    - {name: \"x\", update: {sources: [\"https://a\"]}}\n", "update.about is required"},
+		{"subjects:\n    - {name: \"x\", update: {about: \"a\"}}\n", "update.sources is required"},
+		{"subjects:\n    - {name: \"x\", update: {about: \"a\", sources: [\"git@github.com:a/b.git\"]}}\n", "uses SSH"},
+		{"subjects:\n    - {name: \"x\", update: {about: \"a\", sources: [\"ssh://git@github.com/a/b\"]}}\n", "uses SSH"},
+		{"subjects:\n    - {name: \"x\", update: {about: \"a\", sources: [\"http://a\"]}}\n", "plain http"},
+		{"subjects:\n    - {name: \"x\", update: {about: \"a\", sources: [\"\"]}}\n", "empty entry"},
 	} {
-		os.WriteFile(path, []byte(tc.yaml), 0o644)
+		os.WriteFile(path, []byte(tc.cnf), 0o644)
 		if _, err := LoadProject(path); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "subject x") {
-			t.Errorf("%q: error %v, want %q", tc.yaml, err, tc.want)
+			t.Errorf("%q: error %v, want %q", tc.cnf, err, tc.want)
+		}
+	}
+	// Malformed subjects are refused with a reason.
+	for _, bad := range []string{"subjects: [1]\n", "subjects: [[]]\n", "subjects: [{clock: [\"1\"]}]\n", "subjects: [true]\n"} {
+		os.WriteFile(path, []byte(bad), 0o644)
+		if _, err := LoadProject(path); err == nil {
+			t.Errorf("%q should not load", bad)
 		}
 	}
 	if IsLocalSource("https://x") || !IsLocalSource("../x") || !IsLocalSource("/x") {
@@ -239,19 +245,23 @@ func TestRenderRoundTrip(t *testing.T) {
 	if _, _, ok := (SyncProject{}).Cutoff(); ok {
 		t.Fatal("Cutoff empty")
 	}
-	for _, bad := range []string{"sync:\n  model: m\n  since: 2025-01-01\n", "sync:\n  since: yesterday\n", "sync:\n  projects:\n    /p: {model: m, since: 2025-01-01}\n"} {
+	for _, bad := range []string{"sync: {model: \"m\", since: \"2025-01-01\"}\n", "sync.since: \"yesterday\"\n", "sync.projects: {\"/p\": {model: \"m\", since: \"2025-01-01\"}}\n"} {
 		os.WriteFile(path, []byte(bad), 0o644)
 		if _, err := LoadUser(path); err == nil {
 			t.Fatalf("%q should not load", bad)
 		}
 	}
 
-	// Without an inline key the file is world readable.
+	// Without an inline key the file is world readable, and with no model
+	// configured it still parses.
 	if err := WriteUser(path, DefaultUser(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	info, _ = os.Stat(path)
 	if info.Mode().Perm() != 0o644 {
 		t.Fatalf("expected 0644, got %v", info.Mode().Perm())
+	}
+	if back, err := LoadUser(path); err != nil || len(back.Models) != 0 || back.Search.Candidates != 8 {
+		t.Fatalf("defaults round trip: %v %+v", err, back)
 	}
 }

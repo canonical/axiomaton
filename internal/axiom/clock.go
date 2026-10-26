@@ -70,10 +70,10 @@ func (o Ordering) String() string {
 
 // ClockShape describes one dimension of a subject's sub-clock.
 type ClockShape struct {
-	Name string `yaml:"name" json:"name"`
-	Kind Kind   `yaml:"kind" json:"kind"`
+	Name string `json:"name"`
+	Kind Kind   `json:"kind"`
 	// Repo is the git repository used to order KindGit values.
-	Repo string `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Repo string `json:"repo,omitempty"`
 }
 
 // Validate checks the shape is usable.

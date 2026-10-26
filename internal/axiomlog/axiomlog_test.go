@@ -96,12 +96,12 @@ func TestDiscover(t *testing.T) {
 	// root/outer/repo/axiomaton.cnf  + axiomlog
 	// root/outer/repo/a/b/axiomaton.cnf
 	// root/outer/repo/a/b/c           (cwd)
-	writeFile(t, filepath.Join(root, "outer", "axiomaton.cnf"), "subjects: [[outer, 1]]\nshapes:\n  outer: [{name: n, kind: number}]\n")
+	writeFile(t, filepath.Join(root, "outer", "axiomaton.cnf"), "subjects: [[\"outer\", \"1\"]]\nshapes.outer: [{name: \"n\", kind: \"number\"}]\n")
 	writeFile(t, filepath.Join(root, "outer", "axiomlog"), `{"subject":"outer","time":"2026-01-01T00:00:00Z","clock":{"n":"1"},"statement":"outer fact"}`+"\n")
 	os.MkdirAll(filepath.Join(root, "outer", "repo", ".git"), 0o755)
-	writeFile(t, filepath.Join(root, "outer", "repo", "axiomaton.cnf"), "subjects: [[go, 1.26.1], [svc, 1.0.0]]\nshapes:\n  svc: [{name: version, kind: semver}]\n")
+	writeFile(t, filepath.Join(root, "outer", "repo", "axiomaton.cnf"), "subjects: [[\"go\", \"1.26.1\"], [\"svc\", \"1.0.0\"]]\nshapes.svc: [{name: \"version\", kind: \"semver\"}]\n")
 	writeFile(t, filepath.Join(root, "outer", "repo", "axiomlog"), `{"subject":"go","time":"2026-02-10T00:00:00Z","clock":{"version":"1.26.0"},"statement":"repo fact"}`+"\n")
-	writeFile(t, filepath.Join(root, "outer", "repo", "a", "b", "axiomaton.cnf"), "subjects: [[go, 1.25.0]]\n")
+	writeFile(t, filepath.Join(root, "outer", "repo", "a", "b", "axiomaton.cnf"), "subjects: [[\"go\", \"1.25.0\"]]\n")
 	cwd := filepath.Join(root, "outer", "repo", "a", "b", "c")
 	os.MkdirAll(cwd, 0o755)
 
@@ -180,8 +180,8 @@ func TestProjectSubject(t *testing.T) {
 	inner := filepath.Join(root, "repo", "svc")
 	os.MkdirAll(inner, 0o755)
 	os.MkdirAll(filepath.Join(root, "repo", ".git"), 0o755)
-	os.WriteFile(filepath.Join(root, config.ProjectFile), []byte("subjects:\n  - name: juju\n    shape: [{name: version, kind: semver}]\n    update: {about: outer, sources: [https://outer]}\n  - name: top\n    update: {about: top, sources: [https://top]}\n"), 0o644)
-	os.WriteFile(filepath.Join(root, "repo", config.ProjectFile), []byte("subjects:\n  - name: juju\n    shape: [{name: version, kind: semver}]\n    update: {about: inner, sources: [https://inner]}\n  - plain\n"), 0o644)
+	os.WriteFile(filepath.Join(root, config.ProjectFile), []byte("subjects:\n    - {name: \"juju\", shape: [{name: \"version\", kind: \"semver\"}], update: {about: \"outer\", sources: [\"https://outer\"]}}\n    - {name: \"top\", update: {about: \"top\", sources: [\"https://top\"]}}\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "repo", config.ProjectFile), []byte("subjects:\n    - {name: \"juju\", shape: [{name: \"version\", kind: \"semver\"}], update: {about: \"inner\", sources: [\"https://inner\"]}}\n    - \"plain\"\n"), 0o644)
 	ws, err := Discover(inner)
 	if err != nil {
 		t.Fatal(err)

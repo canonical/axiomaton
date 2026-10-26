@@ -15,7 +15,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -23,7 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/canonical/go-cnf/cnfast"
 
 	"github.com/canonical/axiomaton/internal/config"
 	"github.com/canonical/axiomaton/internal/subjects"
@@ -95,33 +94,39 @@ func (a *app) init(_ context.Context, args []string) error {
 		return a.initTail(cnfPath)
 	}
 
-	var b bytes.Buffer
-	b.WriteString("# axiomaton.cnf: the subjects this project depends on. See `ax --help`.\n")
-	b.WriteString("#\n")
-	b.WriteString("# `ax since <date>` reports what changed for every subject listed here.\n")
-	b.WriteString("# Built-in subjects need no clock: the project's own files are read at\n")
-	b.WriteString("# query time (go uses the go directive in go.mod; go:<module> uses that\n")
-	b.WriteString("# module's require line; rust uses the pinned toolchain or the package's\n")
-	b.WriteString("# rust-version; python uses .python-version or the requires-python lower\n")
-	b.WriteString("# bound; zig uses .zigversion or minimum_zig_version in build.zig.zon;\n")
-	b.WriteString("# snapcraft, charmcraft and rockcraft use the base in their yaml). Give an\n")
-	b.WriteString("# explicit clock, e.g.\n")
-	b.WriteString("# [go, 1.26.1], to pin a version instead. Inside a git repository the\n")
-	b.WriteString("# built-in subjects detected from the project's files are reported even\n")
-	b.WriteString("# when this list leaves them out; `ax update <subject>` builds a log.\n")
-	b.WriteString("# Built-in subjects: " + strings.Join(subjects.Names(), ", ") + ".\n")
-	b.WriteString("subjects:\n")
-	if len(entries) == 0 {
-		b.WriteString("  # - [go, 1.27.0]\n")
-	}
+	header := config.Lines(
+		"axiomaton.cnf: the subjects this project depends on. See `ax --help`.",
+		"",
+		"`ax since <date>` reports what changed for every subject listed here.",
+		"Built-in subjects need no clock: the project's own files are read at",
+		"query time (go uses the go directive in go.mod; go:<module> uses that",
+		"module's require line; rust uses the pinned toolchain or the package's",
+		"rust-version; python uses .python-version or the requires-python lower",
+		"bound; zig uses .zigversion or minimum_zig_version in build.zig.zon;",
+		"snapcraft, charmcraft and rockcraft use the base in their yaml). Give an",
+		"explicit clock, e.g.",
+		"[\"go\", \"1.26.1\"], to pin a version instead. Inside a git repository the",
+		"built-in subjects detected from the project's files are reported even",
+		"when this list leaves them out; `ax update <subject>` builds a log.",
+		"Built-in subjects: "+strings.Join(subjects.Names(), ", ")+".",
+	)
+	list := config.DashedList()
 	for _, e := range entries {
-		fmt.Fprintf(&b, "  - %s  # %s\n", e.name, e.comment)
+		list.Items = append(list.Items, &cnfast.Item{Value: config.Str(e.name), InCmt: config.Comment(e.comment)})
 	}
-	b.WriteString("# Other subjects need a clock shape before clocked axioms can be added:\n")
-	b.WriteString("#  - name: myservice\n")
-	b.WriteString("#    clock: [2.3.0]\n")
-	b.WriteString("#    shape: [{name: version, kind: semver}]\n")
-	if err := os.WriteFile(cnfPath, b.Bytes(), 0o644); err != nil {
+	subjectsItem := config.Pair("subjects", list, "")
+	if len(entries) == 0 {
+		subjectsItem.InCmt = config.Comment("e.g. [\"go\", \"1.27.0\"]")
+	}
+	subjectsItem.PostCmt = config.Lines(
+		"Other subjects need a clock shape before clocked axioms can be added:",
+		"   - {name: \"myservice\", clock: [\"2.3.0\"], shape: [{name: \"version\", kind: \"semver\"}]}",
+	)
+	out, err := config.Document(header, config.BlockMap(subjectsItem))
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(cnfPath, out, 0o644); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.stderr, "ax: wrote %s\n", cnfPath)
@@ -146,40 +151,50 @@ func (a *app) updateProject(cnfPath string, entries []initEntry, requested []str
 	if err != nil {
 		return err
 	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
+	doc, err := cnfast.Parse(data, nil)
+	if err != nil {
 		return fmt.Errorf("parse %s: %w", cnfPath, err)
 	}
-	if doc.Kind == 0 || len(doc.Content) == 0 {
-		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+	root, ok := doc.Value.(*cnfast.Map)
+	if !ok {
+		if doc.Value != nil {
+			return fmt.Errorf("%s is not a map; use -force to replace it", cnfPath)
+		}
+		root = &cnfast.Map{}
+		doc.Value = root
 	}
-	root := doc.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return fmt.Errorf("%s is not a YAML mapping; use -force to replace it", cnfPath)
-	}
-	var seq *yaml.Node
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value != "subjects" {
+	root.Block = true
+	var seq *cnfast.List
+	var pair *cnfast.Item
+	for _, item := range root.Items {
+		if len(item.Key) != 1 || item.Key[0].Data != "subjects" {
 			continue
 		}
-		v := root.Content[i+1]
-		switch {
-		case v.Kind == yaml.SequenceNode:
+		pair = item
+		switch v := item.Value.(type) {
+		case *cnfast.List:
 			seq = v
-		case v.Kind == yaml.ScalarNode && v.Tag == "!!null":
-			*v = yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-			seq = v
+		case *cnfast.Scalar:
+			if v.Text != "null" {
+				return fmt.Errorf("%s: subjects is not a list; use -force to replace the file", cnfPath)
+			}
+			seq = &cnfast.List{}
+			item.Value = seq
 		default:
 			return fmt.Errorf("%s: subjects is not a list; use -force to replace the file", cnfPath)
 		}
 	}
 	if seq == nil {
-		seq = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "subjects"}, seq)
+		seq = &cnfast.List{}
+		pair = &cnfast.Item{Key: []*cnfast.Str{{Data: "subjects"}}, Value: seq}
+		root.Items = append(root.Items, pair)
 	}
-	// Block style keeps one entry per line with its comment; a file that
-	// wrote subjects: [go, rust] inline is rewritten one per line.
-	seq.Style = 0
+	// One entry per line with its comment; a file that wrote
+	// subjects: ["go", "rust"] inline is rewritten one per line.
+	if !seq.Block {
+		seq.Block, seq.Dashed = true, true
+		pair.Indent = config.Indent
+	}
 
 	listed := map[string]bool{}
 	for _, s := range project.Subjects {
@@ -190,7 +205,7 @@ func (a *app) updateProject(cnfPath string, entries []initEntry, requested []str
 		if listed[e.name] {
 			continue
 		}
-		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: e.name, LineComment: "# " + e.comment})
+		seq.Items = append(seq.Items, &cnfast.Item{Value: config.Str(e.name), InCmt: config.Comment(e.comment)})
 		added = append(added, e)
 	}
 
@@ -213,16 +228,11 @@ func (a *app) updateProject(cnfPath string, entries []initEntry, requested []str
 		fmt.Fprintf(a.stderr, "ax: %s is up to date (%d subject(s) listed); nothing written\n", cnfPath, len(project.Subjects))
 		return nil
 	}
-	var b bytes.Buffer
-	enc := yaml.NewEncoder(&b)
-	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
+	out, err := cnfast.Render(doc, nil)
+	if err != nil {
 		return err
 	}
-	if err := enc.Close(); err != nil {
-		return err
-	}
-	if err := os.WriteFile(cnfPath, b.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(cnfPath, out, 0o644); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.stderr, "ax: updated %s\n", cnfPath)

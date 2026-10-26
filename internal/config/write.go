@@ -15,15 +15,13 @@
 package config
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/canonical/go-cnf/cnfast"
 )
 
 // Roles lists the model roles in documentation order.
@@ -38,112 +36,146 @@ var RoleNotes = map[string]string{
 	RoleAgent:     "tool using model for ax update",
 }
 
-// Render serialises the configuration as commented YAML for ax.cnf. Every
+// Render serialises the configuration as commented cnf for ax.cnf. Every
 // section is written out so the file documents the tunables.
-func Render(u User, now time.Time) []byte {
-	var b bytes.Buffer
-	fmt.Fprintf(&b, "# ax.cnf written by ax setup on %s.\n", now.UTC().Format("2006-01-02"))
-	b.WriteString("# Reference: https://github.com/canonical/axiomaton#readme\n\n")
+func Render(u User, now time.Time) ([]byte, error) {
+	header := Lines(
+		fmt.Sprintf("ax.cnf written by ax setup on %s.", now.UTC().Format("2006-01-02")),
+		"Reference: https://github.com/canonical/axiomaton#readme",
+	)
+	root := BlockMap()
+	add := func(item *cnfast.Item) { root.Items = append(root.Items, item) }
 
-	b.WriteString("providers:\n")
 	names := make([]string, 0, len(u.Providers))
 	for n := range u.Providers {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	providers := BlockMap()
 	for _, n := range names {
 		p := u.Providers[n]
-		fmt.Fprintf(&b, "  %s:\n", yamlScalar(n))
+		m := InlineMap()
 		if p.BaseURL != "" {
-			fmt.Fprintf(&b, "    base_url: %s\n", yamlScalar(p.BaseURL))
+			m.Items = append(m.Items, Pair("base_url", Str(p.BaseURL), ""))
 		}
 		if p.APIKey != "" {
-			fmt.Fprintf(&b, "    api_key: %s\n", yamlScalar(p.APIKey))
+			m.Items = append(m.Items, Pair("api_key", Str(p.APIKey), ""))
 		}
 		if p.APIKeyEnv != "" {
-			fmt.Fprintf(&b, "    api_key_env: %s\n", yamlScalar(p.APIKeyEnv))
+			m.Items = append(m.Items, Pair("api_key_env", Str(p.APIKeyEnv), ""))
 		}
+		providers.Items = append(providers.Items, Pair(n, m, ""))
 	}
+	add(Pair("providers", providers, ""))
 
-	b.WriteString("models:\n")
+	// Roles without a model are noted in comments. Inside the block they
+	// sit above the next configured role; a block holding only comments is
+	// not valid cnf, so with no model at all the map is inline and the
+	// notes go above the item that follows it.
+	models := BlockMap()
+	var notes []string
 	for _, role := range Roles {
 		m := u.Models[role]
 		if !m.Configured() {
-			fmt.Fprintf(&b, "  # %s: not configured (%s)\n", role, RoleNotes[role])
+			notes = append(notes, fmt.Sprintf("%s: not configured (%s)", role, RoleNotes[role]))
 			continue
 		}
-		fields := []string{"model: " + yamlScalar(m.Model)}
+		fields := InlineMap(Pair("model", Str(m.Model), ""))
 		if m.Provider != "" {
-			fields = append(fields, "provider: "+yamlScalar(m.Provider))
+			fields.Items = append(fields.Items, Pair("provider", Str(m.Provider), ""))
 		}
 		if m.BaseURL != "" {
-			fields = append(fields, "base_url: "+yamlScalar(m.BaseURL))
+			fields.Items = append(fields.Items, Pair("base_url", Str(m.BaseURL), ""))
 		}
 		if m.APIKey != "" {
-			fields = append(fields, "api_key: "+yamlScalar(m.APIKey))
+			fields.Items = append(fields.Items, Pair("api_key", Str(m.APIKey), ""))
 		}
 		if m.APIKeyEnv != "" {
-			fields = append(fields, "api_key_env: "+yamlScalar(m.APIKeyEnv))
+			fields.Items = append(fields.Items, Pair("api_key_env", Str(m.APIKeyEnv), ""))
 		}
-		fmt.Fprintf(&b, "  %s: {%s}  # %s\n", role, strings.Join(fields, ", "), RoleNotes[role])
+		item := Pair(role, fields, RoleNotes[role])
+		item.PreCmt = Lines(notes...)
+		notes = nil
+		models.Items = append(models.Items, item)
 	}
+	modelsItem := Pair("models", models, "")
+	if models.Block {
+		modelsItem.FootCmt = Lines(notes...)
+		notes = nil
+	}
+	add(modelsItem)
 
-	fmt.Fprintf(&b, "summary_budget: %d  # tokens for ax since -s\n", u.SummaryBudget)
-	b.WriteString("search:\n")
-	fmt.Fprintf(&b, "  candidates: %d  # nearest neighbours per axiom\n", u.Search.Candidates)
-	fmt.Fprintf(&b, "  min_similarity: %s  # cosine floor\n", yamlFloat(u.Search.MinSimilarity))
-	fmt.Fprintf(&b, "  rerank_top_n: %d\n", u.Search.RerankTopN)
-	fmt.Fprintf(&b, "  min_relevance: %s\n", yamlFloat(u.Search.MinRelevance))
-	fmt.Fprintf(&b, "  decision_threshold: %s  # minimum probability to accept a verdict\n", yamlFloat(u.Search.DecisionThreshold))
-	b.WriteString("retry:\n")
-	fmt.Fprintf(&b, "  max_attempts: %d  # tries per model request\n", u.Retry.MaxAttempts)
-	fmt.Fprintf(&b, "  initial_backoff: %s  # seconds; doubles each attempt with jitter\n", yamlFloat(u.Retry.InitialBackoff))
-	fmt.Fprintf(&b, "  max_backoff: %s  # seconds\n", yamlFloat(u.Retry.MaxBackoff))
-	b.WriteString("update:\n")
-	fmt.Fprintf(&b, "  backend: %s  # auto (podman if installed, else lxd), podman, lxd or lxd-vm\n", yamlScalar(u.Update.Backend))
-	fmt.Fprintf(&b, "  image: %s  # podman image\n", yamlScalar(u.Update.Image))
-	fmt.Fprintf(&b, "  lxd_image: %s  # LXD image for containers and virtual machines\n", yamlScalar(u.Update.LXDImage))
-	fmt.Fprintf(&b, "  max_iterations: %d  # tool calls per agent run\n", u.Update.MaxIterations)
-	fmt.Fprintf(&b, "  exec_timeout: %d  # seconds per command in the container\n", u.Update.ExecTimeout)
-	fmt.Fprintf(&b, "  confirmations: %d  # confirmation agents run at once (default: half the CPUs)\n", u.Update.Confirmations)
-	b.WriteString("proxy:\n")
-	b.WriteString("  # Containers have no network of their own; everything goes through a\n")
-	b.WriteString("  # caching proxy on this host that intercepts HTTPS with its own CA\n")
-	b.WriteString("  # (installed in each container) and allows only HTTP and HTTPS out, so\n")
-	b.WriteString("  # apt, Go modules, PyPI, git and toolchain tarballs are fetched once and\n")
-	b.WriteString("  # SSH cannot leave. Disabling it gives containers podman's default network.\n")
-	fmt.Fprintf(&b, "  disabled: %v\n", u.Proxy.Disabled)
-	fmt.Fprintf(&b, "  max_object_mb: %d\n", u.Proxy.MaxObjectMB)
-	b.WriteString("sync:\n")
-	b.WriteString("  # ax sync writes the changes since a cutoff into an agent context file\n")
-	b.WriteString("  # in the project. Defaults for projects it has not seen; each project's\n")
-	b.WriteString("  # own answers are remembered under projects.\n")
-	fmt.Fprintf(&b, "  file: %s  # context file relative to the project, e.g. CLAUDE.local.md\n", yamlScalar(u.Sync.File))
-	fmt.Fprintf(&b, "  model: %s  # report since this model's knowledge cutoff, or\n", yamlScalar(u.Sync.Model))
-	fmt.Fprintf(&b, "  since: %s  # since this date (YYYY-MM-DD)\n", yamlScalar(u.Sync.Since))
+	budget := Pair("summary_budget", Int(u.SummaryBudget), "tokens for ax since -s")
+	budget.PreCmt = Lines(notes...)
+	add(budget)
+	add(Pair("search", BlockMap(
+		Pair("candidates", Int(u.Search.Candidates), "nearest neighbours per axiom"),
+		Pair("min_similarity", Float(u.Search.MinSimilarity), "cosine floor"),
+		Pair("rerank_top_n", Int(u.Search.RerankTopN), ""),
+		Pair("min_relevance", Float(u.Search.MinRelevance), ""),
+		Pair("decision_threshold", Float(u.Search.DecisionThreshold), "minimum probability to accept a verdict"),
+	), ""))
+	add(Pair("retry", BlockMap(
+		Pair("max_attempts", Int(u.Retry.MaxAttempts), "tries per model request"),
+		Pair("initial_backoff", Float(u.Retry.InitialBackoff), "seconds; doubles each attempt with jitter"),
+		Pair("max_backoff", Float(u.Retry.MaxBackoff), "seconds"),
+	), ""))
+	add(Pair("update", BlockMap(
+		Pair("backend", Str(u.Update.Backend), "auto (podman if installed, else lxd), podman, lxd or lxd-vm"),
+		Pair("image", Str(u.Update.Image), "podman image"),
+		Pair("lxd_image", Str(u.Update.LXDImage), "LXD image for containers and virtual machines"),
+		Pair("max_iterations", Int(u.Update.MaxIterations), "tool calls per agent run"),
+		Pair("exec_timeout", Int(u.Update.ExecTimeout), "seconds per command in the container"),
+		Pair("confirmations", Int(u.Update.Confirmations), "confirmation agents run at once (default: half the CPUs)"),
+	), ""))
+	disabled := Pair("disabled", Bool(u.Proxy.Disabled), "")
+	disabled.PreCmt = Lines(
+		"Containers have no network of their own; everything goes through a",
+		"caching proxy on this host that intercepts HTTPS with its own CA",
+		"(installed in each container) and allows only HTTP and HTTPS out, so",
+		"apt, Go modules, PyPI, git and toolchain tarballs are fetched once and",
+		"SSH cannot leave. Disabling it gives containers podman's default network.",
+	)
+	add(Pair("proxy", BlockMap(
+		disabled,
+		Pair("max_object_mb", Int(u.Proxy.MaxObjectMB), ""),
+	), ""))
+	file := Pair("file", Str(u.Sync.File), "context file relative to the project, e.g. CLAUDE.local.md")
+	file.PreCmt = Lines(
+		"ax sync writes the changes since a cutoff into an agent context file",
+		"in the project. Defaults for projects it has not seen; each project's",
+		"own answers are remembered under projects.",
+	)
+	sync := BlockMap(
+		file,
+		Pair("model", Str(u.Sync.Model), "report since this model's knowledge cutoff, or"),
+		Pair("since", Str(u.Sync.Since), "since this date (YYYY-MM-DD)"),
+	)
 	if len(u.Sync.Projects) > 0 {
-		b.WriteString("  projects:\n")
 		dirs := make([]string, 0, len(u.Sync.Projects))
 		for d := range u.Sync.Projects {
 			dirs = append(dirs, d)
 		}
 		sort.Strings(dirs)
+		projects := BlockMap()
 		for _, d := range dirs {
 			p := u.Sync.Projects[d]
-			var fields []string
+			m := InlineMap()
 			if p.File != "" {
-				fields = append(fields, "file: "+yamlScalar(p.File))
+				m.Items = append(m.Items, Pair("file", Str(p.File), ""))
 			}
 			if p.Model != "" {
-				fields = append(fields, "model: "+yamlScalar(p.Model))
+				m.Items = append(m.Items, Pair("model", Str(p.Model), ""))
 			}
 			if p.Since != "" {
-				fields = append(fields, "since: "+yamlScalar(p.Since))
+				m.Items = append(m.Items, Pair("since", Str(p.Since), ""))
 			}
-			fmt.Fprintf(&b, "    %s: {%s}\n", yamlScalar(d), strings.Join(fields, ", "))
+			projects.Items = append(projects.Items, Pair(d, m, ""))
 		}
+		sync.Items = append(sync.Items, Pair("projects", projects, ""))
 	}
-	return b.Bytes()
+	add(Pair("sync", sync, ""))
+	return Document(header, root)
 }
 
 // InlineKey reports whether an API key is stored in the configuration itself
@@ -172,36 +204,13 @@ func WriteUser(path string, u User, now time.Time) error {
 	if u.InlineKey() {
 		perm = 0o600
 	}
-	if err := os.WriteFile(path, Render(u, now), perm); err != nil {
+	data, err := Render(u, now)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, perm); err != nil {
 		return err
 	}
 	// WriteFile leaves the mode of an existing file alone.
 	return os.Chmod(path, perm)
-}
-
-var plainScalar = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/@+-]*$`)
-
-// yamlScalar quotes s unless it is a simple plain scalar in both block and
-// flow context.
-func yamlScalar(s string) string {
-	if plainScalar.MatchString(s) && !looksSpecial(s) {
-		return s
-	}
-	return strconv.Quote(s)
-}
-
-// looksSpecial reports plain scalars YAML would not read back as strings.
-func looksSpecial(s string) bool {
-	switch strings.ToLower(s) {
-	case "true", "false", "yes", "no", "on", "off", "null", "~":
-		return true
-	}
-	if _, err := strconv.ParseFloat(s, 64); err == nil {
-		return true
-	}
-	return false
-}
-
-func yamlFloat(f float64) string {
-	return strconv.FormatFloat(f, 'g', -1, 64)
 }

@@ -25,8 +25,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Model roles configured in ax.cnf.
@@ -40,18 +38,18 @@ const (
 
 // Provider holds connection defaults shared by models using that provider.
 type Provider struct {
-	BaseURL   string `yaml:"base_url"`
-	APIKey    string `yaml:"api_key"`
-	APIKeyEnv string `yaml:"api_key_env"`
+	BaseURL   string `json:"base_url"`
+	APIKey    string `json:"api_key"`
+	APIKeyEnv string `json:"api_key_env"`
 }
 
 // Model configures one model role.
 type Model struct {
-	Provider  string `yaml:"provider"`
-	Model     string `yaml:"model"`
-	BaseURL   string `yaml:"base_url"`
-	APIKey    string `yaml:"api_key"`
-	APIKeyEnv string `yaml:"api_key_env"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	BaseURL   string `json:"base_url"`
+	APIKey    string `json:"api_key"`
+	APIKeyEnv string `json:"api_key_env"`
 }
 
 // Configured reports whether the role has a model set.
@@ -60,34 +58,34 @@ func (m Model) Configured() bool { return m.Model != "" }
 // Search tunes similarity search and contradiction resolution.
 type Search struct {
 	// Candidates is how many nearest neighbours to consider per axiom.
-	Candidates int `yaml:"candidates"`
+	Candidates int `json:"candidates"`
 	// MinSimilarity drops neighbours below this cosine similarity.
-	MinSimilarity float64 `yaml:"min_similarity"`
+	MinSimilarity float64 `json:"min_similarity"`
 	// RerankTopN keeps this many candidates after reranking.
-	RerankTopN int `yaml:"rerank_top_n"`
+	RerankTopN int `json:"rerank_top_n"`
 	// MinRelevance drops reranked candidates below this relevance score.
-	MinRelevance float64 `yaml:"min_relevance"`
+	MinRelevance float64 `json:"min_relevance"`
 	// DecisionThreshold is the minimum probability for a contradiction or
 	// restatement verdict to be accepted; below it the pair is unrelated.
-	DecisionThreshold float64 `yaml:"decision_threshold"`
+	DecisionThreshold float64 `json:"decision_threshold"`
 }
 
 // Update tunes the containerised update agents.
 type Update struct {
 	// Backend runs the agents: "auto" (podman if installed, else lxd),
 	// "podman", "lxd" (system containers) or "lxd-vm" (virtual machines).
-	Backend string `yaml:"backend"`
+	Backend string `json:"backend"`
 	// Image is the podman image.
-	Image string `yaml:"image"`
+	Image string `json:"image"`
 	// LXDImage is the LXD image for containers and virtual machines, e.g.
 	// ubuntu:26.04.
-	LXDImage      string `yaml:"lxd_image"`
-	MaxIterations int    `yaml:"max_iterations"`
+	LXDImage      string `json:"lxd_image"`
+	MaxIterations int    `json:"max_iterations"`
 	// ExecTimeout bounds each tool command inside the container, in seconds.
-	ExecTimeout int `yaml:"exec_timeout"`
+	ExecTimeout int `json:"exec_timeout"`
 	// Confirmations is how many confirmation agents (each in its own
 	// container) run at once.
-	Confirmations int `yaml:"confirmations"`
+	Confirmations int `json:"confirmations"`
 }
 
 // Proxy configures the caching proxy that agent containers download
@@ -95,9 +93,9 @@ type Update struct {
 type Proxy struct {
 	// Disabled turns the proxy off; containers then get podman's default
 	// network, with nothing cached and no restriction on what leaves.
-	Disabled bool `yaml:"disabled"`
+	Disabled bool `json:"disabled"`
 	// MaxObjectMB is the largest download kept in the cache.
-	MaxObjectMB int `yaml:"max_object_mb"`
+	MaxObjectMB int `json:"max_object_mb"`
 }
 
 // Retry tunes how model requests are retried after rate limits and
@@ -105,11 +103,11 @@ type Proxy struct {
 // MaxBackoff, and a Retry-After header from the server is honoured.
 type Retry struct {
 	// MaxAttempts is the total number of tries per request.
-	MaxAttempts int `yaml:"max_attempts"`
+	MaxAttempts int `json:"max_attempts"`
 	// InitialBackoff is the first delay ceiling, in seconds.
-	InitialBackoff float64 `yaml:"initial_backoff"`
+	InitialBackoff float64 `json:"initial_backoff"`
 	// MaxBackoff caps the delay between attempts, in seconds.
-	MaxBackoff float64 `yaml:"max_backoff"`
+	MaxBackoff float64 `json:"max_backoff"`
 }
 
 // Initial and Max return the backoff bounds as durations.
@@ -122,22 +120,22 @@ type Sync struct {
 	// File is the context file to write in a project that has no entry
 	// under Projects yet, relative to the project directory, for example
 	// CLAUDE.local.md.
-	File string `yaml:"file,omitempty"`
+	File string `json:"file,omitempty"`
 	// Model is the OpenRouter model whose knowledge cutoff is used for
 	// projects that have no entry yet.
-	Model string `yaml:"model,omitempty"`
+	Model string `json:"model,omitempty"`
 	// Since is a fixed cutoff date (YYYY-MM-DD) used instead of Model.
-	Since string `yaml:"since,omitempty"`
+	Since string `json:"since,omitempty"`
 	// Projects remembers each project's answers, keyed by its absolute
 	// directory, so later runs need no arguments.
-	Projects map[string]SyncProject `yaml:"projects,omitempty"`
+	Projects map[string]SyncProject `json:"projects,omitempty"`
 }
 
 // SyncProject is what ax sync remembered for one project.
 type SyncProject struct {
-	File  string `yaml:"file,omitempty"`
-	Model string `yaml:"model,omitempty"`
-	Since string `yaml:"since,omitempty"`
+	File  string `json:"file,omitempty"`
+	Model string `json:"model,omitempty"`
+	Since string `json:"since,omitempty"`
 }
 
 // Cutoff returns the model or the date the project reports from, with
@@ -154,17 +152,17 @@ func (s SyncProject) Cutoff() (value string, isDate, ok bool) {
 
 // User is the parsed ax.cnf.
 type User struct {
-	Providers     map[string]Provider `yaml:"providers"`
-	Models        map[string]Model    `yaml:"models"`
-	SummaryBudget int                 `yaml:"summary_budget"`
-	Search        Search              `yaml:"search"`
-	Retry         Retry               `yaml:"retry"`
-	Update        Update              `yaml:"update"`
-	Proxy         Proxy               `yaml:"proxy"`
-	Sync          Sync                `yaml:"sync"`
+	Providers     map[string]Provider `json:"providers"`
+	Models        map[string]Model    `json:"models"`
+	SummaryBudget int                 `json:"summary_budget"`
+	Search        Search              `json:"search"`
+	Retry         Retry               `json:"retry"`
+	Update        Update              `json:"update"`
+	Proxy         Proxy               `json:"proxy"`
+	Sync          Sync                `json:"sync"`
 
 	// Path is where the config was read from, or empty if defaults are in use.
-	Path string `yaml:"-"`
+	Path string `json:"-"`
 }
 
 // DefaultConfirmations is half the CPUs, at least one: each confirmation
@@ -218,7 +216,7 @@ func LoadUser(path string) (User, error) {
 		return cfg, err
 	}
 	var file User
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	if err := Decode(data, &file); err != nil {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.merge(file)

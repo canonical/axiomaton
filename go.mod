@@ -3,6 +3,7 @@ module github.com/canonical/axiomaton
 go 1.27.2
 
 require (
+	github.com/canonical/go-cnf v0.0.2
 	github.com/microsoft/agent-framework-go v0.2.0
 	github.com/openai/openai-go/v3 v3.79.0
 	golang.org/x/mod v0.42.0

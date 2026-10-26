@@ -63,7 +63,7 @@ func TestCLI(t *testing.T) {
 	repo := filepath.Join(root, "repo")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	os.MkdirAll(filepath.Join(repo, "sub"), 0o755)
-	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.26.1]\n  - name: svc\n    clock: [2.3.0]\n    shape: [{name: version, kind: semver}]\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n    - [\"go\", \"1.26.1\"]\n    - {name: \"svc\", clock: [\"2.3.0\"], shape: [{name: \"version\", kind: \"semver\"}]}\n"), 0o644)
 
 	exec := func(args ...string) (string, string, error) {
 		var out, errb strings.Builder
@@ -176,7 +176,7 @@ func TestCLI(t *testing.T) {
 	if _, _, err := exec("update", "svc"); err == nil || !strings.Contains(err.Error(), `"svc" is declared in`) || !strings.Contains(err.Error(), "without an update: block") {
 		t.Fatalf("update svc: %v", err)
 	}
-	cnf := "subjects:\n  - [go, 1.26.1]\n  - name: svc\n    clock: [2.3.0]\n    shape: [{name: version, kind: semver}]\n    update: {about: a service, sources: [https://example.com/releases]}\n  - name: noshape\n    update: {about: shapeless, sources: [https://example.com]}\n"
+	cnf := "subjects:\n    - [\"go\", \"1.26.1\"]\n    - {name: \"svc\", clock: [\"2.3.0\"], shape: [{name: \"version\", kind: \"semver\"}], update: {about: \"a service\", sources: [\"https://example.com/releases\"]}}\n    - {name: \"noshape\", update: {about: \"shapeless\", sources: [\"https://example.com\"]}}\n"
 	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte(cnf), 0o644)
 	if _, _, err := exec("update", "nim"); err == nil || !strings.Contains(err.Error(), "update brief (svc, noshape)") {
 		t.Fatalf("update nim lists custom subjects: %v", err)
@@ -192,11 +192,11 @@ func TestCLI(t *testing.T) {
 		t.Fatalf("update svc with a brief should get past subject resolution: %v", err)
 	}
 	// Built-ins cannot be given a brief.
-	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - name: go\n    update: {about: go, sources: [https://go.dev]}\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n    - {name: \"go\", update: {about: \"go\", sources: [\"https://go.dev\"]}}\n"), 0o644)
 	if _, _, err := exec("update", "go"); err == nil || !strings.Contains(err.Error(), "built-in subject that ax updates by itself") {
 		t.Fatalf("update go with a brief: %v", err)
 	}
-	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.26.1]\n  - name: svc\n    clock: [2.3.0]\n    shape: [{name: version, kind: semver}]\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n    - [\"go\", \"1.26.1\"]\n    - {name: \"svc\", clock: [\"2.3.0\"], shape: [{name: \"version\", kind: \"semver\"}]}\n"), 0o644)
 }
 
 func TestInit(t *testing.T) {
@@ -248,7 +248,7 @@ func TestInit(t *testing.T) {
 		t.Fatalf("indirect dependency listed:\n%s", errOut)
 	}
 	cnf, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf"))
-	if !strings.Contains(string(cnf), "  - go  # detected: ../go.mod says 1.26.1") || !strings.Contains(string(cnf), "  - go:golang.org/x/net  # detected: ../go.mod says v0.50.0") {
+	if !strings.Contains(string(cnf), "    - \"go\"  # detected: ../go.mod says 1.26.1") || !strings.Contains(string(cnf), "    - \"go:golang.org/x/net\"  # detected: ../go.mod says v0.50.0") {
 		t.Fatalf("cnf:\n%s", cnf)
 	}
 	// A second init finds nothing new and leaves the file alone.
@@ -260,8 +260,8 @@ func TestInit(t *testing.T) {
 		t.Fatalf("file changed by an up to date init:\n%s", again)
 	}
 	// Hand edits survive an update that adds a requested subject.
-	custom := "  - name: juju\n    clock: [3.6.4]\n    shape: [{name: version, kind: semver}]\n    update:\n      about: Juju, the engine.\n      sources: [https://github.com/juju/juju/releases]\n"
-	edited := strings.Replace(string(cnf), "subjects:\n", "subjects:\n"+custom, 1) + "shapes:\n  tree:\n    - {name: commit, kind: git, repo: ../tree}  # keep me\n"
+	custom := "    - {name: \"juju\", clock: [\"3.6.4\"], shape: [{name: \"version\", kind: \"semver\"}], update: {about: \"Juju, the engine.\", sources: [\"https://github.com/juju/juju/releases\"]}}\n"
+	edited := strings.Replace(string(cnf), "subjects:\n", "subjects:\n"+custom, 1) + "shapes:\n    tree:\n        - {name: \"commit\", kind: \"git\", repo: \"../tree\"}  # keep me\n"
 	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte(edited), 0o644)
 	_, errOut, err = exec(filepath.Join(repo, "pkg"), "init", "rust")
 	if err != nil || !strings.Contains(errOut, "updated "+filepath.Join(repo, "pkg", "axiomaton.cnf")) || !strings.Contains(errOut, "ax:   + rust") || strings.Contains(errOut, "+ go") {
@@ -270,13 +270,12 @@ func TestInit(t *testing.T) {
 	updated, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf"))
 	for _, want := range []string{
 		"# axiomaton.cnf: the subjects this project depends on.",
-		// yaml.v3 quotes the URL for its colon; the file is otherwise as written.
-		"  - name: juju\n    clock: [3.6.4]\n    shape: [{name: version, kind: semver}]\n    update:\n      about: Juju, the engine.\n      sources: ['https://github.com/juju/juju/releases']\n",
-		"  - go # detected: ../go.mod says 1.26.1\n",
-		"  - go:golang.org/x/net # detected: ../go.mod says v0.50.0\n",
-		"  - rust # requested; clock is detected at query time when possible\n",
+		custom,
+		"    - \"go\"  # detected: ../go.mod says 1.26.1\n",
+		"    - \"go:golang.org/x/net\"  # detected: ../go.mod says v0.50.0\n",
+		"    - \"rust\"  # requested; clock is detected at query time when possible\n",
 		"# Other subjects need a clock shape before clocked axioms can be added:\n",
-		"shapes:\n  tree:\n    - {name: commit, kind: git, repo: ../tree} # keep me\n",
+		"shapes:\n    tree:\n        - {name: \"commit\", kind: \"git\", repo: \"../tree\"}  # keep me\n",
 	} {
 		if !strings.Contains(string(updated), want) {
 			t.Fatalf("updated cnf lacks %q:\n%s", want, updated)
@@ -291,7 +290,7 @@ func TestInit(t *testing.T) {
 		t.Fatalf("stale subject warning: %v\n%s", err, errOut)
 	}
 	// A broken file is not touched.
-	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte("subjects: notalist\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte("subjects: \"notalist\"\n"), 0o644)
 	if _, _, err := exec(filepath.Join(repo, "pkg"), "init"); err == nil || !strings.Contains(err.Error(), "-force") {
 		t.Fatalf("broken cnf: %v", err)
 	}
@@ -300,7 +299,7 @@ func TestInit(t *testing.T) {
 	if _, errOut, err := exec(filepath.Join(repo, "pkg"), "init"); err != nil || !strings.Contains(errOut, "+ go @ 1.26.1") {
 		t.Fatalf("empty cnf: %v\n%s", err, errOut)
 	}
-	if data, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf")); !strings.HasPrefix(string(data), "subjects:\n  - go # detected") {
+	if data, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf")); !strings.HasPrefix(string(data), "subjects:\n    - \"go\"  # detected") {
 		t.Fatalf("empty cnf result:\n%s", data)
 	}
 	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), cnf, 0o644)
@@ -357,7 +356,7 @@ func TestInit(t *testing.T) {
 	}
 
 	// A pinned clock in the file wins over detection.
-	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.25.0]\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte("subjects: [[\"go\", \"1.25.0\"]]\n"), 0o644)
 	out, _, _ = exec(filepath.Join(repo, "pkg"), "since", "2025-08-01")
 	if !strings.Contains(out, "## go (version <= 1.25.0)") {
 		t.Fatalf("pinned:\n%s", out)
@@ -403,7 +402,7 @@ func TestInit(t *testing.T) {
 		t.Fatalf("unpinned init: %v %s", err, errOut)
 	}
 	cnf, _ = os.ReadFile(filepath.Join(crate, "axiomaton.cnf"))
-	if !strings.Contains(string(cnf), "  - rust  # detected from Cargo.toml; no version pinned, so every release is reported") {
+	if !strings.Contains(string(cnf), "    - \"rust\"  # detected from Cargo.toml; no version pinned, so every release is reported") {
 		t.Fatalf("cnf:\n%s", cnf)
 	}
 

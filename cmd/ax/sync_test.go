@@ -105,11 +105,11 @@ func TestSyncCommand(t *testing.T) {
 	defer srv.Close()
 	cfgPath := filepath.Join(root, "cfg", "axiomaton", "ax.cnf")
 	os.MkdirAll(filepath.Dir(cfgPath), 0o755)
-	os.WriteFile(cfgPath, []byte("providers:\n  openrouter:\n    base_url: "+srv.URL+"/api\n"), 0o644)
+	os.WriteFile(cfgPath, []byte("providers.openrouter.base_url: \""+srv.URL+"/api\"\n"), 0o644)
 	repo := filepath.Join(root, "repo")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module m\n\ngo 1.26.0\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - go\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects: [\"go\"]\n"), 0o644)
 
 	exec := func(in string, tty bool, args ...string) (string, string, error) {
 		oldIn, oldTTY := stdin, interactive
@@ -189,7 +189,7 @@ func TestSyncCommand(t *testing.T) {
 	other := filepath.Join(root, "other")
 	os.MkdirAll(filepath.Join(other, ".git"), 0o755)
 	os.WriteFile(filepath.Join(other, "go.mod"), []byte("module o\n\ngo 1.26.0\n"), 0o644)
-	os.WriteFile(filepath.Join(other, "axiomaton.cnf"), []byte("subjects:\n  - go\n"), 0o644)
+	os.WriteFile(filepath.Join(other, "axiomaton.cnf"), []byte("subjects: [\"go\"]\n"), 0o644)
 	repo, other = other, repo
 	_, errOut, err = exec("2024-05-31\ncodex\n", true, "sync")
 	repo, other = other, repo
@@ -207,7 +207,7 @@ func TestSyncCommand(t *testing.T) {
 	// A file git already tracks is still written, with a warning.
 	third := filepath.Join(root, "third")
 	os.MkdirAll(third, 0o755)
-	os.WriteFile(filepath.Join(third, "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.26.0]\n"), 0o644)
+	os.WriteFile(filepath.Join(third, "axiomaton.cnf"), []byte("subjects: [[\"go\", \"1.26.0\"]]\n"), 0o644)
 	os.WriteFile(filepath.Join(third, "GEMINI.md"), []byte("mine\n"), 0o644)
 	for _, args := range [][]string{{"init", "-q"}, {"add", "GEMINI.md"}} {
 		if out, err := osexec.Command("git", append([]string{"-C", third}, args...)...).CombinedOutput(); err != nil {
@@ -227,7 +227,7 @@ func TestSyncCommand(t *testing.T) {
 	// Defaults in ax.cnf serve a project never synced, with no prompts.
 	fourth := filepath.Join(root, "fourth")
 	os.MkdirAll(fourth, 0o755) // not a git repository: no ignore check
-	os.WriteFile(filepath.Join(fourth, "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.26.0]\n"), 0o644)
+	os.WriteFile(filepath.Join(fourth, "axiomaton.cnf"), []byte("subjects: [[\"go\", \"1.26.0\"]]\n"), 0o644)
 	cfg.Sync.File, cfg.Sync.Since = "notes/context.md", "2024-05-31"
 	if err := config.WriteUser(cfgPath, cfg, time.Now()); err != nil {
 		t.Fatal(err)

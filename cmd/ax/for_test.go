@@ -100,11 +100,11 @@ func TestForCommand(t *testing.T) {
 	defer srv.Close()
 	cfgPath := filepath.Join(root, "cfg", "axiomaton", "ax.cnf")
 	os.MkdirAll(filepath.Dir(cfgPath), 0o755)
-	os.WriteFile(cfgPath, []byte("providers:\n  openrouter:\n    base_url: "+srv.URL+"/api\n"), 0o644)
+	os.WriteFile(cfgPath, []byte("providers.openrouter.base_url: \""+srv.URL+"/api\"\n"), 0o644)
 	repo := filepath.Join(root, "repo")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module m\n\ngo 1.26.0\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - go\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects: [\"go\"]\n"), 0o644)
 
 	// No models are configured, so queries are deterministic without
 	// --offline; the global --offline flag is used below to prove the
@@ -172,7 +172,7 @@ func TestForCommand(t *testing.T) {
 
 	// With an agent configured the search runs first; a hit is stored as
 	// authoritative and wins over the estimate from then on.
-	os.WriteFile(cfgPath, []byte("providers:\n  openrouter:\n    base_url: "+srv.URL+"/api\n    api_key: k\nmodels:\n  agent: {model: fake/agent}\n"), 0o644)
+	os.WriteFile(cfgPath, []byte("providers.openrouter: {base_url: \""+srv.URL+"/api\", api_key: \"k\"}\nmodels.agent: {model: \"fake/agent\"}\n"), 0o644)
 	oldResearch := research
 	defer func() { research = oldResearch }()
 	var asked []cutoff.Model

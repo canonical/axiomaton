@@ -171,23 +171,45 @@ like the language subjects do; any other module starts empty,
 
 ### Project file format
 
-`axiomaton.cnf` files are YAML. Each subject is either the compact
-`[name, clock values...]` form or a mapping. Subjects that are not built in
-need a clock shape, declared inline or under `shapes:`, before clocked
-axioms can be added for them:
+`axiomaton.cnf` and `ax.cnf` are written in the
+[cnf](https://github.com/canonical/cnf) format, read with
+`github.com/canonical/go-cnf/cnfmap` and decoded through its JSON form.
+Strings are always quoted, a dotted key such as `shapes.juju` is a path
+through nested maps, and a list is written inline (`["go", "1.26.1"]`),
+dashed (one `- ` line per item, each on a single line) or fenced (`---`
+between items, which may then span several lines).
 
-```yaml
-subjects:
-  - go                 # clock read from go.mod; pin with [go, 1.26.1]
-  - name: myservice
-    clock: [2.3.0]
-    shape:
-      - {name: version, kind: semver}
-  - [juju, 3f9c2a1]
-shapes:
-  juju:
-    - {name: commit, kind: git, repo: ../juju}
+Each subject is a bare name `"go"`, the compact list `["name", "clock
+values"...]` or a map with `name`, `clock`, `shape` and `update` keys.
+Subjects that are not built in need a clock shape, declared inline or under
+`shapes`, before clocked axioms can be added for them:
+
 ```
+subjects:
+    - "go"  # clock read from go.mod; pin with ["go", "1.26.1"]
+    - {name: "myservice", clock: ["2.3.0"], shape: [{name: "version", kind: "semver"}]}
+    - ["juju", "3f9c2a1"]
+shapes:
+    juju:
+        - {name: "commit", kind: "git", repo: "../juju"}
+```
+
+A subject map too long for one line goes in the fenced form instead:
+
+```
+subjects:
+    ---
+    "go"
+    ---
+    name: "myservice"
+    clock: ["2.3.0"]
+    shape: [{name: "version", kind: "semver"}]
+    ---
+```
+
+`ax init` edits the file through the cnf syntax tree, so comments and
+hand-written entries survive, and a file written in the inline or fenced
+form keeps that form.
 
 Clock kinds are `semver`, `goversion`, `number`, `string` and `git`
 (ordered by `git merge-base --is-ancestor` in `repo`, relative to the
@@ -229,42 +251,41 @@ The file requires an embedding model, a decision model and two general
 purpose models: one for summarisation (a low cost model good at it) and one
 capable of running tools for the agents. A reranking model is optional.
 
-```yaml
+```
 providers:
-  openrouter:                       # built in; shown here with its defaults
-    base_url: https://openrouter.ai/api
-    api_key_env: OPENROUTER_API_KEY # or api_key: sk-or-...
+    # built in; shown here with its defaults
+    openrouter: {base_url: "https://openrouter.ai/api", api_key_env: "OPENROUTER_API_KEY"}  # or api_key: "sk-or-..."
 models:
-  embedding: {model: perplexity/pplx-embed-v1-4b}
-  rerank:    {model: cohere/rerank-v3.5}        # optional
-  decision:  {model: typesafe/jev-1.13}         # OpenRouter Decisions API
-  summary:   {model: openai/gpt-oss-120b}
-  agent:     {model: openai/gpt-6-luna-pro}
-summary_budget: 1500                # tokens
+    embedding: {model: "perplexity/pplx-embed-v1-4b"}
+    rerank: {model: "cohere/rerank-v3.5"}  # optional
+    decision: {model: "typesafe/jev-1.13"}  # OpenRouter Decisions API
+    summary: {model: "openai/gpt-oss-120b"}
+    agent: {model: "openai/gpt-6-luna-pro"}
+summary_budget: 1500  # tokens
 search:
-  candidates: 8                     # nearest neighbours per axiom
-  min_similarity: 0.35              # cosine floor
-  rerank_top_n: 5
-  min_relevance: 0.1
-  decision_threshold: 0.5           # minimum probability to accept a verdict
+    candidates: 8  # nearest neighbours per axiom
+    min_similarity: 0.35  # cosine floor
+    rerank_top_n: 5
+    min_relevance: 0.1
+    decision_threshold: 0.5  # minimum probability to accept a verdict
 retry:
-  max_attempts: 8                   # tries per model request
-  initial_backoff: 1                # seconds; doubles each attempt, with jitter
-  max_backoff: 60                   # seconds
+    max_attempts: 8  # tries per model request
+    initial_backoff: 1  # seconds; doubles each attempt, with jitter
+    max_backoff: 60  # seconds
 update:
-  backend: auto                     # podman if installed, else lxd; or podman, lxd, lxd-vm
-  image: public.ecr.aws/ubuntu/ubuntu:latest   # podman image
-  lxd_image: ubuntu:26.04           # LXD image for containers and virtual machines
-  max_iterations: 80                # tool calls per agent run
-  exec_timeout: 300                 # seconds per command in the container
-  confirmations: 4                  # confirmation agents at once (default: half the CPUs)
+    backend: "auto"  # podman if installed, else lxd; or podman, lxd, lxd-vm
+    image: "public.ecr.aws/ubuntu/ubuntu:latest"  # podman image
+    lxd_image: "ubuntu:26.04"  # LXD image for containers and virtual machines
+    max_iterations: 80  # tool calls per agent run
+    exec_timeout: 300  # seconds per command in the container
+    confirmations: 4  # confirmation agents at once (default: half the CPUs)
 proxy:
-  disabled: false                   # containers have no network except the caching proxy
-  max_object_mb: 1024
+    disabled: false  # containers have no network except the caching proxy
+    max_object_mb: 1024
 sync:
-  file: CLAUDE.local.md             # defaults for ax sync in projects it has not seen
-  model: openai/gpt-6-luna-pro      # or since: 2025-06-01
-  projects: {}                      # filled in by ax sync, one entry per project
+    file: "CLAUDE.local.md"  # defaults for ax sync in projects it has not seen
+    model: "openai/gpt-6-luna-pro"  # or since: "2025-06-01"
+    projects: {}  # filled in by ax sync, one entry per project
 ```
 
 Any model may set its own `provider`, `base_url`, `api_key` or
@@ -307,12 +328,12 @@ repository need nothing.
 projects that have never been synced, so a user who always works with the
 same agent and model never gets asked:
 
-```yaml
+```
 sync:
-  file: CLAUDE.local.md
-  model: openai/gpt-6-luna-pro      # or since: 2025-06-01
-  projects:
-    /home/me/src/juju: {file: CLAUDE.local.md, since: 2025-06-01}
+    file: "CLAUDE.local.md"
+    model: "openai/gpt-6-luna-pro"  # or since: "2025-06-01"
+    projects:
+        "/home/me/src/juju": {file: "CLAUDE.local.md", since: "2025-06-01"}
 ```
 
 ## Updating logs with agents
@@ -418,24 +439,28 @@ Everything else (the sandbox, the proxy, proposing, confirming,
 corrections, splits, review, the epoch floor) is exactly as for built-in
 subjects.
 
-```yaml
+```
 subjects:
-  - name: juju
-    clock: [3.6.4]
-    shape: [{name: version, kind: semver}]
+    ---
+    name: "juju"
+    clock: ["3.6.4"]
+    shape: [{name: "version", kind: "semver"}]
     update:
-      about: >
-        Juju, the application orchestration engine. Axioms are what a charm
-        author or an operator driving the juju CLI needs to know: CLI and
-        model config changes, charm and relation semantics, supported bases.
-      sources:
-        - https://github.com/juju/juju/releases
-        - https://documentation.ubuntu.com/juju/3.6/
-        - ../juju                      # a local checkout, shipped into the sandbox
-      setup: snap install juju --classic   # optional, run in every fresh sandbox
-      clock: the Juju release the statement holds from, without a leading v   # optional
-      verify: a ready `juju bootstrap localhost` is the fastest check          # optional
-      vm: false                        # optional, forces the lxd-vm backend
+        about:
+            """
+            Juju, the application orchestration engine. Axioms are what a charm
+            author or an operator driving the juju CLI needs to know: CLI and
+            model config changes, charm and relation semantics, supported bases.
+            """
+        sources:
+            - "https://github.com/juju/juju/releases"
+            - "https://documentation.ubuntu.com/juju/3.6/"
+            - "../juju"  # a local checkout, shipped into the sandbox
+        setup: "snap install juju --classic"  # optional, run in every fresh sandbox
+        clock: "the Juju release the statement holds from, without a leading v"  # optional
+        verify: "a ready `juju bootstrap localhost` is the fastest check"  # optional
+        vm: false  # optional, forces the lxd-vm backend
+    ---
 ```
 
 `about` and at least one source are required, and the subject needs a

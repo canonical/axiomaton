@@ -15,13 +15,12 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/canonical/axiomaton/internal/axiom"
 )
@@ -51,22 +50,22 @@ type SubjectRef struct {
 type UpdateDef struct {
 	// About says what the subject is and what its axioms are for, in a
 	// sentence or two. It is the only description the agents get.
-	About string `yaml:"about"`
+	About string `json:"about"`
 	// Sources are release notes, documentation, registries or repositories
 	// the agents work from, most authoritative first: https URLs, or paths
 	// to local git checkouts (relative to the project file), which are
 	// shipped into the sandbox as git bundles. SSH remotes cannot be used.
-	Sources []string `yaml:"sources"`
+	Sources []string `json:"sources"`
 	// Setup is a shell command run in every fresh sandbox before an agent
 	// starts, for example to install the tool under study.
-	Setup string `yaml:"setup,omitempty"`
+	Setup string `json:"setup,omitempty"`
 	// Clock explains how to fill the clock values, in addition to what the
 	// shape says, e.g. "the release the statement holds from, without v".
-	Clock string `yaml:"clock,omitempty"`
+	Clock string `json:"clock,omitempty"`
 	// Verify is extra guidance for the confirmation agent.
-	Verify string `yaml:"verify,omitempty"`
+	Verify string `json:"verify,omitempty"`
 	// VM runs the agents in an LXD virtual machine rather than a container.
-	VM bool `yaml:"vm,omitempty"`
+	VM bool `json:"vm,omitempty"`
 }
 
 // Validate checks that the brief has what the agents need.
@@ -97,49 +96,54 @@ func IsLocalSource(s string) bool {
 	return !strings.Contains(s, "://")
 }
 
-// UnmarshalYAML accepts either the compact list form [name, v1, v2] or the
-// mapping form {name: x, clock: [v1], shape: [...]}.
-func (s *SubjectRef) UnmarshalYAML(n *yaml.Node) error {
-	switch n.Kind {
-	case yaml.SequenceNode:
+// UnmarshalJSON accepts a bare name "go", the compact list form
+// ["name", "v1", "v2"] or the map form {name: "x", clock: ["v1"], shape:
+// [...], update: {...}}, as the cnf file spells them.
+func (s *SubjectRef) UnmarshalJSON(data []byte) error {
+	data = []byte(strings.TrimSpace(string(data)))
+	if len(data) == 0 {
+		return errors.New("empty subject")
+	}
+	switch data[0] {
+	case '"':
+		return json.Unmarshal(data, &s.Name)
+	case '[':
 		var parts []string
-		if err := n.Decode(&parts); err != nil {
-			return err
+		if err := json.Unmarshal(data, &parts); err != nil {
+			return fmt.Errorf("subject list must hold strings: %w", err)
 		}
 		if len(parts) == 0 {
-			return fmt.Errorf("line %d: empty subject", n.Line)
+			return errors.New("empty subject")
 		}
 		s.Name = parts[0]
 		s.Clock = parts[1:]
 		return nil
-	case yaml.ScalarNode:
-		return n.Decode(&s.Name)
-	case yaml.MappingNode:
+	case '{':
 		var m struct {
-			Name   string             `yaml:"name"`
-			Clock  []string           `yaml:"clock"`
-			Shape  []axiom.ClockShape `yaml:"shape"`
-			Update *UpdateDef         `yaml:"update"`
+			Name   string             `json:"name"`
+			Clock  []string           `json:"clock"`
+			Shape  []axiom.ClockShape `json:"shape"`
+			Update *UpdateDef         `json:"update"`
 		}
-		if err := n.Decode(&m); err != nil {
+		if err := json.Unmarshal(data, &m); err != nil {
 			return err
 		}
 		if m.Name == "" {
-			return fmt.Errorf("line %d: subject has no name", n.Line)
+			return errors.New("subject has no name")
 		}
 		s.Name, s.Clock, s.Shape, s.Update = m.Name, m.Clock, m.Shape, m.Update
 		return nil
 	}
-	return fmt.Errorf("line %d: subject must be a list or mapping", n.Line)
+	return errors.New("subject must be a name, a list or a map")
 }
 
 // Project is a parsed axiomaton.cnf.
 type Project struct {
-	Subjects []SubjectRef                  `yaml:"subjects"`
-	Shapes   map[string][]axiom.ClockShape `yaml:"shapes"`
+	Subjects []SubjectRef                  `json:"subjects"`
+	Shapes   map[string][]axiom.ClockShape `json:"shapes"`
 
 	// Dir is the directory containing the file.
-	Dir string `yaml:"-"`
+	Dir string `json:"-"`
 }
 
 // LoadProject parses the axiomaton.cnf at path. Relative git repo paths in
@@ -150,7 +154,7 @@ func LoadProject(path string) (Project, error) {
 		return Project{}, err
 	}
 	var p Project
-	if err := yaml.Unmarshal(data, &p); err != nil {
+	if err := Decode(data, &p); err != nil {
 		return Project{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	p.Dir = filepath.Dir(path)
