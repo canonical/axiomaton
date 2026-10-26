@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -219,13 +220,29 @@ func TestInit(t *testing.T) {
 	if err != nil || !strings.Contains(out, "## go (version <= 1.26.1)") || strings.Contains(out, "1.27.0") {
 		t.Fatalf("detected clock: %v\n%s", err, out)
 	}
+	// Inside a repository the detected subjects are the defaults before
+	// any init, and nothing is written.
+	out, errOut, err := exec(filepath.Join(repo, "pkg"), "-v", "since", "2025-08-01")
+	if err != nil || !strings.Contains(out, "## go (version <= 1.26.1)") || !strings.Contains(errOut, "go detected from ../go.mod; no axiomaton.cnf lists it") || !strings.Contains(errOut, "go:golang.org/x/net detected from ../go.mod") {
+		t.Fatalf("detected defaults: %v\n%s\n%s", err, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "pkg", "axiomaton.cnf")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("since wrote a config: %v", err)
+	}
+	out, errOut, err = exec(filepath.Join(repo, "pkg"), "subjects")
+	if err != nil || !strings.Contains(out, "go\tshape [version:goversion]") || !strings.Contains(out, "default @ 1.26.1 (detected)") {
+		t.Fatalf("subjects before init: %v\n%s\n%s", err, out, errOut)
+	}
 
-	_, errOut, err := exec(filepath.Join(repo, "pkg"), "init")
+	_, errOut, err = exec(filepath.Join(repo, "pkg"), "init")
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, errOut)
 	}
-	if !strings.Contains(errOut, "go @ 1.26.1 (from ../go.mod)") || !strings.Contains(errOut, "go:golang.org/x/net @ v0.50.0 (from ../go.mod)") || !strings.Contains(errOut, "created "+filepath.Join(repo, "pkg", "axiomlog")) || !strings.Contains(errOut, "run `ax setup`") {
+	if !strings.Contains(errOut, "go @ 1.26.1 (from ../go.mod)") || !strings.Contains(errOut, "go:golang.org/x/net @ v0.50.0 (from ../go.mod)") || !strings.Contains(errOut, "run `ax setup`") {
 		t.Fatalf("init output:\n%s", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "pkg", "axiomlog")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("init wrote an axiomlog: %v", err)
 	}
 	if strings.Contains(errOut, "uuid") {
 		t.Fatalf("indirect dependency listed:\n%s", errOut)

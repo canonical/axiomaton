@@ -57,7 +57,9 @@ Usage:
 Commands:
   since     Render the axioms for a subject that became true after <date>,
             restricted to the subject's clock (e.g. go 1.26.1). Without a
-            subject, the default subjects from axiomaton.cnf files are used.
+            subject, the default subjects are used: those from axiomaton.cnf
+            files plus, in a git repository, the built-ins detected from
+            the project's own files, as ax init would list them.
             A built-in subject given without a clock reads the project's
             version from its own files (go: the go directive in go.mod;
             go:<module>: that module's require line in go.mod; rust: the
@@ -68,7 +70,7 @@ Commands:
             charmcraft and rockcraft: the base in their yaml, e.g. 24.04).
   for       Like since, with the cutoff taken from the knowledge cutoff that
             OpenRouter publishes for <model> (e.g. openai/gpt-5-mini).
-  add       Append an axiom to the nearest writeable axiomlog.
+  add       Append an axiom to the axiomlog beside the nearest axiomaton.cnf.
   update    Run sandboxed agents (podman, or LXD containers or VMs) to
             extend the log of a built-in subject (go, python, rust, zig,
             snapcraft, charmcraft, rockcraft, or go:<module> for a Go
@@ -343,9 +345,9 @@ func (a *app) changes(ctx context.Context, since time.Time, args []string, summa
 	if len(args) > 0 {
 		targets = []config.SubjectRef{{Name: args[0], Clock: args[1:]}}
 	} else {
-		targets = e.ws.DefaultSubjects(a.global)
+		targets = a.defaultSubjects(e)
 		if len(targets) == 0 {
-			a.warnf("no default subjects: add an %s with a subjects list, or name a subject explicitly", config.ProjectFile)
+			a.warnf("no default subjects: add an %s with a subjects list (ax init), or name a subject explicitly", config.ProjectFile)
 			return "", nil
 		}
 	}
@@ -392,6 +394,31 @@ func (a *app) changes(ctx context.Context, since time.Time, args []string, summa
 		md += "\n"
 	}
 	return md, nil
+}
+
+// defaultSubjects lists the subjects a report covers when none is named:
+// those declared by project files, plus, inside a git repository, every
+// built-in subject detected from the project's own files that no project
+// file lists, exactly as ax init would add them. No file is written.
+func (a *app) defaultSubjects(e *env) []config.SubjectRef {
+	targets := e.ws.DefaultSubjects(a.global)
+	if e.ws.RepoRoot == "" {
+		return targets
+	}
+	seen := map[string]bool{}
+	for _, t := range targets {
+		seen[t.Name] = true
+	}
+	for _, d := range subjects.Detect(a.dir) {
+		name := d.Subject.Name()
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		a.logf("%s detected from %s; no %s lists it", name, shortenFrom(a.dir, d.Source), config.ProjectFile)
+		targets = append(targets, config.SubjectRef{Name: name})
+	}
+	return targets
 }
 
 // detectClock fills in the clock of a built-in subject referenced without
@@ -457,7 +484,7 @@ func (a *app) resolver(cfg config.User) query.Resolver {
 func (a *app) add(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("ax add", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
-	logPath := fs.String("l", "", "axiomlog file to append to (default: nearest writeable log)")
+	logPath := fs.String("l", "", "axiomlog file to append to (default: the axiomlog beside the nearest axiomaton.cnf)")
 	source := fs.String("source", "", "where the statement comes from")
 	fs.Usage = func() {
 		fmt.Fprintln(a.stderr, `usage: ax add [-l axiomlog] [-source url] <date> <subject> [clock values...] "<statement>"`)
@@ -522,7 +549,7 @@ func (a *app) add(ctx context.Context, args []string) error {
 func (a *app) update(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("ax update", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
-	logPath := fs.String("l", "", "axiomlog file to append to (default: nearest writeable log)")
+	logPath := fs.String("l", "", "axiomlog file to append to (default: the axiomlog beside the nearest axiomaton.cnf)")
 	image := fs.String("image", "", "image for the agents (default from ax.cnf for the backend in use)")
 	yes := fs.Bool("y", false, "accept unconfirmed axioms without asking")
 	jobs := fs.Int("j", 0, "confirmation agents to run at once (default from ax.cnf: half the CPUs)")
@@ -778,7 +805,7 @@ func (a *app) subjects(_ context.Context, args []string) error {
 		names[n] = true
 	}
 	defaults := map[string]string{}
-	for _, d := range e.ws.DefaultSubjects(a.global) {
+	for _, d := range a.defaultSubjects(e) {
 		switch clock := a.detectClock(d); {
 		case len(d.Clock) > 0:
 			defaults[d.Name] = strings.Join(clock, " ")

@@ -17,9 +17,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -130,12 +132,13 @@ func TestSyncCommand(t *testing.T) {
 		t.Fatal("nothing should be written on failure")
 	}
 
-	// A model, an agent, -y: the file is created, ignored and remembered.
+	// A model, an agent, -y: the file is created and remembered, with a
+	// warning that it is not ignored; .gitignore is left alone.
 	out, errOut, err := exec("", false, "sync", "-y", "-agent", "claude", "gpt-5-mini")
 	if err != nil || out != "" {
 		t.Fatalf("sync: %v\n%s\n%s", err, out, errOut)
 	}
-	for _, want := range []string{"knowledge cutoff 2024-05-31", "added /CLAUDE.local.md to " + filepath.Join(repo, ".gitignore"), "appended the axiom changes to CLAUDE.local.md (since the knowledge cutoff of gpt-5-mini, 2024-05-31)"} {
+	for _, want := range []string{"knowledge cutoff 2024-05-31", "CLAUDE.local.md is inside the git repository at " + repo + " and not ignored; add /CLAUDE.local.md to " + filepath.Join(repo, ".gitignore"), "appended the axiom changes to CLAUDE.local.md (since the knowledge cutoff of gpt-5-mini, 2024-05-31)"} {
 		if !strings.Contains(errOut, want) {
 			t.Fatalf("stderr lacks %q:\n%s", want, errOut)
 		}
@@ -144,8 +147,8 @@ func TestSyncCommand(t *testing.T) {
 	if !strings.HasPrefix(string(data), "# Axiom changes\n\n") || !strings.HasSuffix(string(data), "\n**end of axiom changes**\n") || !strings.Contains(string(data), "## go (version <= 1.26.0)") {
 		t.Fatalf("context file:\n%s", data)
 	}
-	if ign, _ := os.ReadFile(filepath.Join(repo, ".gitignore")); string(ign) != "# agent context written by ax sync\n/CLAUDE.local.md\n" {
-		t.Fatalf(".gitignore:\n%s", ign)
+	if _, err := os.Stat(filepath.Join(repo, ".gitignore")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf(".gitignore written: %v", err)
 	}
 	cfg, err := config.LoadUser(cfgPath)
 	if err != nil {
@@ -159,10 +162,11 @@ func TestSyncCommand(t *testing.T) {
 	}
 
 	// The user's own text around the block survives a second run, which
-	// needs no arguments and no further .gitignore change.
+	// needs no arguments; once ignored, the warning stops.
+	os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("/CLAUDE.local.md\n"), 0o644)
 	os.WriteFile(ctxFile, []byte("# My notes\n\nkeep me\n\n"+string(data)+"\nafter\n"), 0o644)
 	_, errOut, err = exec("", false, "sync")
-	if err != nil || !strings.Contains(errOut, "replaced the axiom changes in CLAUDE.local.md") || strings.Contains(errOut, "added /CLAUDE.local.md") {
+	if err != nil || !strings.Contains(errOut, "replaced the axiom changes in CLAUDE.local.md") || strings.Contains(errOut, "not ignored") {
 		t.Fatalf("second sync: %v\n%s", err, errOut)
 	}
 	data, _ = os.ReadFile(ctxFile)
@@ -180,16 +184,16 @@ func TestSyncCommand(t *testing.T) {
 		t.Fatalf("remembered date: %+v", p)
 	}
 
-	// Interactive first run in another project: both answers are asked,
-	// the agent name maps to its file, and the .gitignore question is put.
+	// Interactive first run in another project: both answers are asked and
+	// the agent name maps to its file; nothing is asked about .gitignore.
 	other := filepath.Join(root, "other")
 	os.MkdirAll(filepath.Join(other, ".git"), 0o755)
 	os.WriteFile(filepath.Join(other, "go.mod"), []byte("module o\n\ngo 1.26.0\n"), 0o644)
 	os.WriteFile(filepath.Join(other, "axiomaton.cnf"), []byte("subjects:\n  - go\n"), 0o644)
 	repo, other = other, repo
-	_, errOut, err = exec("2024-05-31\ncodex\ny\n", true, "sync")
+	_, errOut, err = exec("2024-05-31\ncodex\n", true, "sync")
 	repo, other = other, repo
-	if err != nil || !strings.Contains(errOut, "Report changes since") || !strings.Contains(errOut, "Agent context file to update") || !strings.Contains(errOut, "Add it to .gitignore?") || !strings.Contains(errOut, "appended the axiom changes to AGENTS.override.md") {
+	if err != nil || !strings.Contains(errOut, "Report changes since") || !strings.Contains(errOut, "Agent context file to update") || strings.Contains(errOut, "gitignore?") || !strings.Contains(errOut, "AGENTS.override.md is inside the git repository") || !strings.Contains(errOut, "appended the axiom changes to AGENTS.override.md") {
 		t.Fatalf("interactive sync: %v\n%s", err, errOut)
 	}
 	if _, err := os.Stat(filepath.Join(other, "AGENTS.override.md")); err != nil {
@@ -200,18 +204,24 @@ func TestSyncCommand(t *testing.T) {
 		t.Fatalf("remembered other: %+v", p)
 	}
 
-	// Declining the .gitignore entry refuses to write.
+	// A file git already tracks is still written, with a warning.
 	third := filepath.Join(root, "third")
-	os.MkdirAll(filepath.Join(third, ".git"), 0o755)
+	os.MkdirAll(third, 0o755)
 	os.WriteFile(filepath.Join(third, "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.26.0]\n"), 0o644)
-	repo, third = third, repo
-	_, _, err = exec("n\n", true, "sync", "-agent", "gemini", "2024-05-31")
-	repo, third = third, repo
-	if err == nil || !strings.Contains(err.Error(), "refusing to write GEMINI.md") {
-		t.Fatalf("declined: %v", err)
+	os.WriteFile(filepath.Join(third, "GEMINI.md"), []byte("mine\n"), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "GEMINI.md"}} {
+		if out, err := osexec.Command("git", append([]string{"-C", third}, args...)...).CombinedOutput(); err != nil {
+			t.Skipf("git %v: %v\n%s", args, err, out)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(third, "GEMINI.md")); err == nil {
-		t.Fatal("file written despite refusal")
+	repo, third = third, repo
+	_, errOut, err = exec("", true, "sync", "-agent", "gemini", "2024-05-31")
+	repo, third = third, repo
+	if err != nil || !strings.Contains(errOut, "GEMINI.md is tracked by git in "+third) || !strings.Contains(errOut, "appended the axiom changes to GEMINI.md") {
+		t.Fatalf("tracked: %v\n%s", err, errOut)
+	}
+	if data, _ := os.ReadFile(filepath.Join(third, "GEMINI.md")); !strings.HasPrefix(string(data), "mine\n") || !strings.Contains(string(data), "# Axiom changes") {
+		t.Fatalf("tracked file not written:\n%s", data)
 	}
 
 	// Defaults in ax.cnf serve a project never synced, with no prompts.

@@ -17,7 +17,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -37,8 +36,9 @@ type initEntry struct {
 	summary string
 }
 
-// init writes an axiomaton.cnf (and an empty axiomlog) for the working
-// directory, listing the built-in subjects detected there. Detected subjects
+// init writes an axiomaton.cnf for the working directory, listing the
+// built-in subjects detected there. No axiomlog is written: ax add and ax
+// update create it beside the file on first use. Detected subjects
 // are written without a clock so the project's version is read from its
 // own files, such as go.mod, at query time. An existing file is updated in
 // place: subjects detected or requested that it does not list yet are
@@ -106,8 +106,9 @@ func (a *app) init(_ context.Context, args []string) error {
 	b.WriteString("# bound; zig uses .zigversion or minimum_zig_version in build.zig.zon;\n")
 	b.WriteString("# snapcraft, charmcraft and rockcraft use the base in their yaml). Give an\n")
 	b.WriteString("# explicit clock, e.g.\n")
-	b.WriteString("# [go, 1.26.1], to pin a version instead. Remove any dependency you\n")
-	b.WriteString("# do not want reported on; `ax update <subject>` builds its log.\n")
+	b.WriteString("# [go, 1.26.1], to pin a version instead. Inside a git repository the\n")
+	b.WriteString("# built-in subjects detected from the project's files are reported even\n")
+	b.WriteString("# when this list leaves them out; `ax update <subject>` builds a log.\n")
 	b.WriteString("# Built-in subjects: " + strings.Join(subjects.Names(), ", ") + ".\n")
 	b.WriteString("subjects:\n")
 	if len(entries) == 0 {
@@ -231,18 +232,8 @@ func (a *app) updateProject(cnfPath string, entries []initEntry, requested []str
 	return nil
 }
 
-// initTail creates the project's axiomlog when missing and points at ax
-// setup when there is no user configuration yet.
+// initTail points at ax setup when there is no user configuration yet.
 func (a *app) initTail(cnfPath string) error {
-	logPath := filepath.Join(a.dir, config.LogFile)
-	if _, err := os.Stat(logPath); errors.Is(err, os.ErrNotExist) {
-		header := "# axiomlog: one JSON object per line, appended by `ax add` and `ax update`.\n"
-		if err := os.WriteFile(logPath, []byte(header), 0o644); err != nil {
-			return err
-		}
-		fmt.Fprintf(a.stderr, "ax: created %s\n", logPath)
-	}
-
 	if cfg, err := config.LoadUser(a.configPath); err == nil && cfg.Path == "" {
 		a.warnf("no %s found; run `ax setup` to configure models", a.configPath)
 	}

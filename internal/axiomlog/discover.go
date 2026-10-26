@@ -208,8 +208,10 @@ func (ws *Workspace) Load(builtin ...[]axiom.Axiom) ([]axiom.Axiom, error) {
 }
 
 // WriteTarget picks the log that add and update should append to: the
-// nearest writeable log or project file directory inside the repository,
-// then the repository root, then the user log.
+// axiomlog beside the nearest writeable axiomaton.cnf inside the repository
+// (or, outside any repository, in the working directory itself), else the
+// user log. The log need not exist yet; Append creates it. A stray axiomlog
+// with no axiomaton.cnf beside it is read but never chosen for writing.
 func (ws *Workspace) WriteTarget() (string, error) {
 	for _, l := range ws.Layers {
 		if ws.RepoRoot != "" && !l.InRepo {
@@ -218,14 +220,8 @@ func (ws *Workspace) WriteTarget() (string, error) {
 		if ws.RepoRoot == "" && l.Dir != ws.Layers[0].Dir {
 			break
 		}
-		if (l.HasLog || l.Project != nil) && writeable(l.LogPath) {
+		if l.Project != nil && writeable(l.LogPath) {
 			return l.LogPath, nil
-		}
-	}
-	if ws.RepoRoot != "" {
-		p := filepath.Join(ws.RepoRoot, config.LogFile)
-		if writeable(p) {
-			return p, nil
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(ws.UserLog), 0o755); err != nil {

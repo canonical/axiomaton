@@ -148,19 +148,21 @@ func TestDiscover(t *testing.T) {
 		t.Fatalf("write target = %q", target)
 	}
 
-	// No project files at all inside a repo: falls back to repo root.
+	// No project files at all inside a repo: falls back to the user log,
+	// even past a stray axiomlog with no axiomaton.cnf beside it.
 	bare := filepath.Join(root, "bare")
 	os.MkdirAll(filepath.Join(bare, ".git"), 0o755)
 	os.MkdirAll(filepath.Join(bare, "x"), 0o755)
+	writeFile(t, filepath.Join(bare, "x", "axiomlog"), "")
 	ws, _ = Discover(filepath.Join(bare, "x"))
-	if target, _ := ws.WriteTarget(); target != filepath.Join(bare, "axiomlog") {
+	if target, _ := ws.WriteTarget(); target != filepath.Join(root, "xdg", "axiomaton", "axiomlog") {
 		t.Fatalf("bare target = %q", target)
 	}
 	if len(ws.DefaultSubjects(false)) != 0 {
 		t.Fatal("bare repo should have no defaults")
 	}
 
-	// No repo: falls back to the user log.
+	// No repo: the working directory's own cnf, else the user log.
 	ws, _ = Discover(filepath.Join(root, "outer"))
 	if target, _ := ws.WriteTarget(); target != filepath.Join(root, "outer", "axiomlog") {
 		t.Fatalf("outer target = %q (own dir has a cnf)", target)

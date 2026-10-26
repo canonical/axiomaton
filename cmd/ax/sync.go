@@ -75,7 +75,7 @@ func (a *app) sync(ctx context.Context, args []string) error {
 	summarise := fs.Bool("s", false, "summarise the report with the summary model")
 	fs.BoolVar(summarise, "summarise", false, "alias for -s")
 	refresh := fs.Bool("refresh", false, "fetch the model catalogue again instead of using the cached copy")
-	yes := fs.Bool("y", false, "accept defaults without prompting (adds the file to .gitignore when needed)")
+	yes := fs.Bool("y", false, "accept defaults without prompting")
 	file := fs.String("file", "", "context file to update, relative to the project (remembered)")
 	agent := fs.String("agent", "", "agent whose context file to update: "+agentChoices()+" (remembered)")
 	fs.Usage = func() {
@@ -175,9 +175,7 @@ func (a *app) sync(ctx context.Context, args []string) error {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(project, path)
 	}
-	if err := a.ensureUntracked(ctx, path, p); err != nil {
-		return err
-	}
+	a.warnIfCommitted(ctx, path)
 
 	var since time.Time
 	if entry.Since != "" {
@@ -264,48 +262,25 @@ func spliceSync(doc, block string) (out string, replaced bool) {
 	return b.String(), true
 }
 
-// ensureUntracked refuses to write a context file that git would commit:
-// inside a repository the file must be ignored (and not already tracked).
-// When it is not ignored the user is offered an entry in the repository's
-// .gitignore, which -y accepts.
-func (a *app) ensureUntracked(ctx context.Context, path string, p prompter) error {
+// warnIfCommitted warns when git would commit the context file: inside a
+// repository it should be ignored and not already tracked. The file is
+// written either way; .gitignore is never touched.
+func (a *app) warnIfCommitted(ctx context.Context, path string) {
 	root, ok := repoRoot(filepath.Dir(path))
 	if !ok {
-		return nil
+		return
 	}
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
-		return err
+		return
 	}
 	rel = filepath.ToSlash(rel)
-	if tracked(ctx, root, rel) {
-		return fmt.Errorf("%s is tracked by git in %s; an agent context file should not be committed. Run `git rm --cached %s`, add it to .gitignore and retry", rel, root, rel)
+	switch {
+	case tracked(ctx, root, rel):
+		a.warnf("%s is tracked by git in %s; an agent context file should not be committed. Run `git rm --cached %s` and add it to .gitignore", rel, root, rel)
+	case !ignored(ctx, root, rel):
+		a.warnf("%s is inside the git repository at %s and not ignored; add /%s to %s so the agent context is not committed", rel, root, rel, filepath.Join(root, ".gitignore"))
 	}
-	if ignored(ctx, root, rel) {
-		return nil
-	}
-	ignoreFile := filepath.Join(root, ".gitignore")
-	add, err := p.yesNo(fmt.Sprintf("%s is inside the git repository at %s and not ignored; committing an agent context file is unwise. Add it to %s?", rel, root, shortenFrom(a.dir, ignoreFile)), true)
-	if err != nil {
-		return err
-	}
-	if !add {
-		return fmt.Errorf("refusing to write %s: it would be committed; add it to %s or choose a file outside the repository", rel, ignoreFile)
-	}
-	prefix := ""
-	if data, err := os.ReadFile(ignoreFile); err == nil && len(data) > 0 && data[len(data)-1] != '\n' {
-		prefix = "\n"
-	}
-	f, err := os.OpenFile(ignoreFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := fmt.Fprintf(f, "%s# agent context written by ax sync\n/%s\n", prefix, rel); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.stderr, "ax: added /%s to %s\n", rel, ignoreFile)
-	return nil
 }
 
 // repoRoot finds the nearest enclosing directory with a .git entry.
@@ -335,7 +310,7 @@ func tracked(ctx context.Context, root, rel string) bool {
 
 // ignored reports whether git ignores rel in the repository at root. When
 // git is unavailable or root is not a usable repository the root .gitignore
-// is scanned for the path itself, which covers what ensureUntracked writes.
+// is scanned for the path itself.
 func ignored(ctx context.Context, root, rel string) bool {
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "check-ignore", "-q", "--", rel)
 	if err := cmd.Run(); err == nil {

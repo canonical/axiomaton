@@ -52,10 +52,14 @@ subjects are only consumed up to the nearest directory containing a `.git`
 directory, which can be disabled with a `--global`/`-g` flag. Logs above the
 repository are still consulted. A user wide log at
 `$XDG_DATA_HOME/axiomaton/axiomlog` is always consulted and is the fallback
-write target outside of any repository.
+write target when no `axiomaton.cnf` is found.
 
-When `ax since 2025-08-01` is run, the default subjects are returned. When no
-default subjects are declared, nothing is printed and a warning goes to stderr.
+When `ax since 2025-08-01` is run, the default subjects are returned: those
+declared in `axiomaton.cnf` files plus, inside a git repository, every
+built-in subject detected from the project's own files (the same list
+`ax init` would write) without any file being written. `ax for` and `ax
+sync` use the same defaults. When there are none, nothing is printed and a
+warning goes to stderr.
 A subject with nothing to report (no axiom changed or added since the cutoff
 within its clock) is left out of the output, and `-v` says so on stderr; when
 that is true of every subject the output is a single "No changes for ..."
@@ -63,8 +67,9 @@ line under the heading. The output carries each axiom's clock value (e.g.
 `[1.26.0]`) but no dates and no sources: it is written for a model's
 context, where those only add noise. The log keeps both.
 
-Run `ax init` in a project to create its `axiomaton.cnf` (and an empty
-`axiomlog`). Built-in subjects detect themselves: `go` is listed when a
+Run `ax init` in a project to create its `axiomaton.cnf`; the `axiomlog`
+beside it is created by the first `ax add` or `ax update`. Built-in
+subjects detect themselves: `go` is listed when a
 `go.mod` is found in the directory or its parents up to the repository root,
 and every direct requirement in that `go.mod` adds a
 `go:<module path>` subject (e.g. `go:golang.org/x/net`);
@@ -237,9 +242,11 @@ The `ax` tool also contains these other commands:
 - `ax setup`
 - `ax sync openai/gpt-6-luna-pro` (then just `ax sync`)
 
-`add` and `update` append to the nearest writeable `axiomlog` inside the
-repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
-repository root, then the user wide log. `-l <axiomlog>` overrides the target.
+`add` and `update` append to the `axiomlog` beside the nearest writeable
+`axiomaton.cnf` inside the repository, creating the log when it does not
+exist yet, and otherwise to the user wide log. An `axiomlog` with no
+`axiomaton.cnf` beside it is read but never written to. `-l <axiomlog>`
+overrides the target.
 
 The update command works for built-in subjects: `go`, `python`, `rust`,
 `zig`, `snapcraft`, `charmcraft`, `rockcraft`, and `go:<module path>` for any
@@ -346,10 +353,10 @@ a file without the block gets it appended. `-s` summarises the report with
 the summary model and `-refresh` refetches the model catalogue.
 
 A context file is personal to a checkout and should not be committed, so
-`ax sync` refuses to write one that git would pick up: inside a repository
-the file must be ignored. When it is not, the command offers to add it to
-the repository's `.gitignore` (`-y` accepts), and a file already tracked by
-git is refused outright. Files outside any repository need nothing.
+inside a repository `ax sync` warns when the file is not ignored, or is
+already tracked by git, and says what to add to `.gitignore`. The file is
+written either way; `.gitignore` is never edited. Files outside any
+repository need nothing.
 
 `sync.file`, `sync.model` or `sync.since` in `ax.cnf` set defaults for
 projects that have never been synced, so a user who always works with the

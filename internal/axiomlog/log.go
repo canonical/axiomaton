@@ -74,8 +74,11 @@ func ReadFile(path string) ([]axiom.Axiom, error) {
 	return Read(f, path)
 }
 
-// Append writes axioms to the end of the log at path, creating the file and
-// its directory as needed.
+// Header opens every log Append creates.
+const Header = "# axiomlog: one JSON object per line, appended by `ax add` and `ax update`.\n"
+
+// Append writes axioms to the end of the log at path, creating the file
+// (opened with Header) and its directory as needed.
 func Append(path string, axioms ...axiom.Axiom) error {
 	if len(axioms) == 0 {
 		return nil
@@ -88,8 +91,16 @@ func Append(path string, axioms ...axiom.Axiom) error {
 		return err
 	}
 	defer f.Close()
-	// Make sure we start on a fresh line even if the file was hand edited.
-	if info, err := f.Stat(); err == nil && info.Size() > 0 {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		if _, err := f.WriteString(Header); err != nil {
+			return err
+		}
+	} else {
+		// Make sure we start on a fresh line even if the file was hand edited.
 		tail := make([]byte, 1)
 		if rf, err := os.Open(path); err == nil {
 			rf.ReadAt(tail, info.Size()-1)
