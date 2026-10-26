@@ -311,6 +311,14 @@ func (c *lxdContainer) exec(ctx context.Context, workdir string, env []string, c
 	return res, nil
 }
 
+func (c *lxdContainer) Push(ctx context.Context, local, remote string) error {
+	out, err := exec.CommandContext(ctx, c.bin, "file", "push", "--create-dirs", "--mode", "0644", local, c.name+remote).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("lxc file push %s: %w: %s", remote, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func (c *lxdContainer) Close(ctx context.Context) error {
 	c.log("deleting LXD instance %s", c.name)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)

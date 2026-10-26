@@ -80,7 +80,7 @@ type Update struct {
 	// Image is the podman image.
 	Image string `yaml:"image"`
 	// LXDImage is the LXD image for containers and virtual machines, e.g.
-	// ubuntu:24.04.
+	// ubuntu:26.04.
 	LXDImage      string `yaml:"lxd_image"`
 	MaxIterations int    `yaml:"max_iterations"`
 	// ExecTimeout bounds each tool command inside the container, in seconds.
@@ -159,7 +159,7 @@ func DefaultUser() User {
 		Update: Update{
 			Backend:       "auto",
 			Image:         "public.ecr.aws/ubuntu/ubuntu:latest",
-			LXDImage:      "ubuntu:24.04",
+			LXDImage:      "ubuntu:26.04",
 			MaxIterations: 80,
 			ExecTimeout:   300,
 			Confirmations: DefaultConfirmations(),

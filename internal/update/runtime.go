@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -46,6 +47,9 @@ type ExecResult struct {
 type Container interface {
 	// Exec runs a shell command, bounded by timeout.
 	Exec(ctx context.Context, command string, timeout time.Duration) (ExecResult, error)
+	// Push copies a file from the host to remote (an absolute path inside
+	// the container), creating parent directories.
+	Push(ctx context.Context, local, remote string) error
 	// Close stops and removes the container.
 	Close(ctx context.Context) error
 }
@@ -344,6 +348,17 @@ func (c *podmanContainer) exec(ctx context.Context, workdir, command string, tim
 		return res, fmt.Errorf("podman exec: %w", err)
 	}
 	return res, nil
+}
+
+func (c *podmanContainer) Push(ctx context.Context, local, remote string) error {
+	if res, err := c.exec(ctx, "", "mkdir -p "+shellQuote(path.Dir(remote)), 30*time.Second); err != nil || res.ExitCode != 0 {
+		return fmt.Errorf("creating %s: %v %s", path.Dir(remote), err, strings.TrimSpace(res.Stderr))
+	}
+	out, err := exec.CommandContext(ctx, c.bin, "cp", local, c.name+":"+remote).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("podman cp %s: %w: %s", remote, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (c *podmanContainer) Close(ctx context.Context) error {

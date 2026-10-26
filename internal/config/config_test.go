@@ -125,6 +125,59 @@ shapes:
 	}
 }
 
+func TestLoadProjectUpdate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ProjectFile)
+	os.WriteFile(path, []byte(`
+subjects:
+  - name: juju
+    clock: [3.6.4]
+    shape: [{name: version, kind: semver}]
+    update:
+      about: Juju, the orchestration engine.
+      sources:
+        - https://github.com/juju/juju/releases
+        - ../juju
+        - /abs/checkout
+      setup: snap install juju --classic
+      clock: the release without v
+      verify: bootstrap localhost
+      vm: true
+  - name: plain
+    shape: [{name: version, kind: semver}]
+`), 0o644)
+	p, err := LoadProject(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := p.Subjects[0].Update
+	if u == nil || u.About != "Juju, the orchestration engine." || u.Setup != "snap install juju --classic" || u.Clock != "the release without v" || u.Verify != "bootstrap localhost" || !u.VM {
+		t.Fatalf("update: %+v", u)
+	}
+	if len(u.Sources) != 3 || u.Sources[0] != "https://github.com/juju/juju/releases" || u.Sources[1] != filepath.Join(dir, "../juju") || u.Sources[2] != "/abs/checkout" {
+		t.Fatalf("sources: %v", u.Sources)
+	}
+	if p.Subjects[1].Update != nil {
+		t.Fatal("plain has no brief")
+	}
+	for _, tc := range []struct{ yaml, want string }{
+		{"subjects:\n  - name: x\n    update:\n      sources: [https://a]\n", "update.about is required"},
+		{"subjects:\n  - name: x\n    update:\n      about: a\n", "update.sources is required"},
+		{"subjects:\n  - name: x\n    update:\n      about: a\n      sources: [git@github.com:a/b.git]\n", "uses SSH"},
+		{"subjects:\n  - name: x\n    update:\n      about: a\n      sources: [ssh://git@github.com/a/b]\n", "uses SSH"},
+		{"subjects:\n  - name: x\n    update:\n      about: a\n      sources: [http://a]\n", "plain http"},
+		{"subjects:\n  - name: x\n    update:\n      about: a\n      sources: ['']\n", "empty entry"},
+	} {
+		os.WriteFile(path, []byte(tc.yaml), 0o644)
+		if _, err := LoadProject(path); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "subject x") {
+			t.Errorf("%q: error %v, want %q", tc.yaml, err, tc.want)
+		}
+	}
+	if IsLocalSource("https://x") || !IsLocalSource("../x") || !IsLocalSource("/x") {
+		t.Fatal("IsLocalSource")
+	}
+}
+
 func TestRenderRoundTrip(t *testing.T) {
 	u := DefaultUser()
 	p := u.Providers["openrouter"]
@@ -161,7 +214,7 @@ func TestRenderRoundTrip(t *testing.T) {
 	if err != nil || ep.Model != "7" || ep.BaseURL != "http://localhost:1234/v1" || ep.APIKey != "x" {
 		t.Fatalf("summary %+v %v", ep, err)
 	}
-	if back.Search.MinSimilarity != 0.4 || back.Search.Candidates != 8 || back.Update.Image != u.Update.Image || back.Update.ExecTimeout != 300 || back.Update.Confirmations != DefaultConfirmations() || DefaultConfirmations() < 1 || back.Proxy.Disabled || back.Proxy.MaxObjectMB != 1024 || back.Update.Backend != "auto" || back.Update.LXDImage != "ubuntu:24.04" {
+	if back.Search.MinSimilarity != 0.4 || back.Search.Candidates != 8 || back.Update.Image != u.Update.Image || back.Update.ExecTimeout != 300 || back.Update.Confirmations != DefaultConfirmations() || DefaultConfirmations() < 1 || back.Proxy.Disabled || back.Proxy.MaxObjectMB != 1024 || back.Update.Backend != "auto" || back.Update.LXDImage != "ubuntu:26.04" {
 		t.Fatalf("tunables: %+v", back)
 	}
 	if _, err := back.Resolve(RoleRerank); !errors.Is(err, ErrNotConfigured) {

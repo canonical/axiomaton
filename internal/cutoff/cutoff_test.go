@@ -30,6 +30,8 @@ import (
 
 type fakeContainer struct{ closed bool }
 
+func (f *fakeContainer) Push(context.Context, string, string) error { return nil }
+
 func (f *fakeContainer) Exec(_ context.Context, cmd string, _ time.Duration) (update.ExecResult, error) {
 	return update.ExecResult{Stdout: "ran: " + cmd}, nil
 }

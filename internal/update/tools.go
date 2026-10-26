@@ -205,12 +205,31 @@ type BatchOutput struct {
 // update agent, so that every run of ax divides the same history the same
 // way. See gomod.Batch for the rules.
 func BatchTool(logf func(string, ...any)) (tool.FuncTool, error) {
+	return batchTool(logf, false)
+}
+
+// CommitBatchTool is BatchTool for subjects whose clock is a git commit
+// rather than a module version: releases are named by the full hash of
+// their last commit, which is what such a clock holds.
+func CommitBatchTool(logf func(string, ...any)) (tool.FuncTool, error) {
+	return batchTool(logf, true)
+}
+
+func batchTool(logf func(string, ...any), byCommit bool) (tool.FuncTool, error) {
+	desc := "For a Go module with no tagged releases: group its commit history into discrete " +
+		"releases. A new release starts when the go directive changes, after a gap of more than a month, " +
+		"or at a new calendar month. Each release gets the pseudo-version of its last commit; use that " +
+		"as the clock and its date as the date when proposing axioms for changes in that release."
+	if byCommit {
+		desc = "Group a repository's commit history into discrete releases so that every run divides it " +
+			"the same way. A new release starts after a gap of more than a month or at a new calendar month " +
+			"(and when the go field changes, if you give it). Each release is named by the full hash of its " +
+			"last commit; use that hash as the git clock value and the release's date as the date when " +
+			"proposing axioms for changes in that release."
+	}
 	return functool.New(functool.Config{
-		Name: "batch_commits",
-		Description: "For a Go module with no tagged releases: group its commit history into discrete " +
-			"releases. A new release starts when the go directive changes, after a gap of more than a month, " +
-			"or at a new calendar month. Each release gets the pseudo-version of its last commit; use that " +
-			"as the clock and its date as the date when proposing axioms for changes in that release.",
+		Name:        "batch_commits",
+		Description: desc,
 	}, func(_ context.Context, in BatchInput) (BatchOutput, error) {
 		commits := make([]gomod.Commit, 0, len(in.Commits))
 		for _, c := range in.Commits {
@@ -225,12 +244,20 @@ func BatchTool(logf func(string, ...any)) (tool.FuncTool, error) {
 		}
 		var out BatchOutput
 		for _, r := range gomod.Batch(commits, strings.TrimSpace(in.BaseVersion)) {
+			version := r.Version
+			if byCommit {
+				version = r.Last
+			}
 			out.Releases = append(out.Releases, BatchRelease{
-				Version: r.Version, Date: r.Time.Format("2006-01-02"), First: r.First, Last: r.Last,
+				Version: version, Date: r.Time.Format("2006-01-02"), First: r.First, Last: r.Last,
 				Commits: r.Commits, GoVersion: r.GoVersion, Reason: r.Reason,
 			})
 		}
-		out.Message = fmt.Sprintf("%d commit(s) grouped into %d release(s); review each release's changes (git diff <previous last_commit>..<last_commit>) and propose axioms with its version as the clock and its date as the date", len(commits), len(out.Releases))
+		what := "its version"
+		if byCommit {
+			what = "its last_commit hash"
+		}
+		out.Message = fmt.Sprintf("%d commit(s) grouped into %d release(s); review each release's changes (git diff <previous last_commit>..<last_commit>) and propose axioms with %s as the clock and its date as the date", len(commits), len(out.Releases), what)
 		if logf != nil {
 			logf("batched %d commit(s) into %d release(s)", len(commits), len(out.Releases))
 		}

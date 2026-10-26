@@ -33,10 +33,22 @@ import (
 type fakeContainer struct {
 	rt     *fakeRuntime
 	closed bool
+	// cmds and pushes record what happened in this container, in order.
+	cmds   []string
+	pushes []string
 }
 
 func (f *fakeContainer) Exec(_ context.Context, cmd string, _ time.Duration) (ExecResult, error) {
+	f.cmds = append(f.cmds, cmd)
+	if f.rt != nil && f.rt.fail != "" && strings.Contains(cmd, f.rt.fail) {
+		return ExecResult{ExitCode: 7, Stderr: "boom"}, nil
+	}
 	return ExecResult{Stdout: "ran: " + cmd}, nil
+}
+
+func (f *fakeContainer) Push(_ context.Context, local, remote string) error {
+	f.pushes = append(f.pushes, local+" -> "+remote)
+	return nil
 }
 
 func (f *fakeContainer) Close(context.Context) error {
@@ -57,6 +69,8 @@ type fakeRuntime struct {
 	running, peak int
 	// hold keeps each container open until released, to observe overlap.
 	hold chan struct{}
+	// fail makes any command containing it exit non-zero.
+	fail string
 }
 
 func (f *fakeRuntime) Start(context.Context) (Container, error) {
@@ -543,3 +557,102 @@ func TestTruncate(t *testing.T) {
 	a := axiom.Axiom{}
 	_ = a
 }
+
+// preparedSubject wraps a built-in with shipments and a setup command.
+type preparedSubject struct {
+	subjects.Builtin
+	ships []Shipment
+	setup string
+}
+
+func (p preparedSubject) Shipments() []Shipment { return p.ships }
+func (p preparedSubject) Setup() string         { return p.setup }
+
+func TestPrepared(t *testing.T) {
+	rt := &fakeRuntime{}
+	ag := newFakeAgent(t)
+	b, _ := subjects.Lookup("go")
+	sub := preparedSubject{Builtin: b, ships: []Shipment{{Local: "/tmp/a.bundle", Remote: "/work/src/a.bundle"}}, setup: "apt-get install -y juju"}
+	u := &Updater{Subject: sub, Runtime: rt, Agent: ag, ExecTimeout: time.Second, Log: t.Logf}
+	if _, _, err := u.Propose(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	c := rt.started[0]
+	if len(c.pushes) != 1 || c.pushes[0] != "/tmp/a.bundle -> /work/src/a.bundle" {
+		t.Fatalf("pushes: %v", c.pushes)
+	}
+	if len(c.cmds) == 0 || c.cmds[0] != "apt-get install -y juju" {
+		t.Fatalf("setup must run first: %v", c.cmds)
+	}
+	if _, err := u.Confirm(context.Background(), axiom.Axiom{Subject: "go", Statement: "this is true"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := rt.started[1]; len(c.pushes) != 1 || len(c.cmds) == 0 || c.cmds[0] != "apt-get install -y juju" {
+		t.Fatalf("confirmation sandboxes are prepared too: %v %v", c.pushes, c.cmds)
+	}
+
+	rt.fail = "juju"
+	if _, _, err := u.Propose(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "setup exited 7: boom") {
+		t.Fatalf("failed setup: %v", err)
+	}
+	if rt.started[2].closed != true {
+		t.Fatal("the sandbox is removed after a failed setup")
+	}
+
+	// A plain built-in is not prepared at all.
+	rt = &fakeRuntime{}
+	u = &Updater{Subject: b, Runtime: rt, Agent: ag, ExecTimeout: time.Second}
+	u.Propose(context.Background(), nil)
+	if c := rt.started[0]; len(c.pushes) != 0 || (len(c.cmds) > 0 && c.cmds[0] == "apt-get install -y juju") {
+		t.Fatalf("unexpected preparation: %v %v", c.pushes, c.cmds)
+	}
+}
+
+func TestCommitBatchTool(t *testing.T) {
+	bt, err := CommitBatchTool(t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(bt.Description(), "full hash of its last commit") {
+		t.Fatalf("description: %s", bt.Description())
+	}
+	in := `{"commits":[
+		{"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","time":"2025-03-01T10:00:00Z"},
+		{"hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","time":"2025-03-20T10:00:00Z"},
+		{"hash":"cccccccccccccccccccccccccccccccccccccccc","time":"2025-04-02T10:00:00Z"}]}`
+	res, err := bt.Call(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.(BatchOutput)
+	if len(out.Releases) != 2 || out.Releases[0].Version != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" || out.Releases[1].Version != "cccccccccccccccccccccccccccccccccccccccc" || out.Releases[1].Date != "2025-04-02" {
+		t.Fatalf("releases: %+v", out.Releases)
+	}
+	if !strings.Contains(out.Message, "last_commit hash as the clock") {
+		t.Fatalf("message: %s", out.Message)
+	}
+
+	// A git-clocked subject that is not a Go module gets this tool.
+	spy := &toolSpy{seen: map[string]bool{}}
+	rt := &fakeRuntime{}
+	tree := preparedSubject{Builtin: fakeGitSubject{}}
+	u := &Updater{Subject: tree, Runtime: rt, Agent: spy, ExecTimeout: time.Second}
+	u.Propose(context.Background(), nil)
+	if !spy.seen["batch_commits"] {
+		t.Fatalf("git clock subject lacks batch_commits: %v", spy.seen)
+	}
+}
+
+// fakeGitSubject is a minimal subject with a git ordered clock.
+type fakeGitSubject struct{ subjects.Builtin }
+
+func (fakeGitSubject) Name() string { return "tree" }
+func (fakeGitSubject) Shape() []axiom.ClockShape {
+	return []axiom.ClockShape{{Name: "commit", Kind: axiom.KindGit, Repo: "/r"}}
+}
+func (fakeGitSubject) UpdateInstructions() string             { return "i" }
+func (fakeGitSubject) UpdateTask([]axiom.Axiom) string        { return "t" }
+func (fakeGitSubject) ConfirmInstructions() string            { return "ci" }
+func (fakeGitSubject) ConfirmTask(axiom.Axiom) string         { return "ct" }
+func (fakeGitSubject) Seed() ([]axiom.Axiom, error)           { return nil, nil }
+func (fakeGitSubject) Detect(string) ([]string, string, bool) { return nil, "", false }

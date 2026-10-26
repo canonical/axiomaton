@@ -188,7 +188,7 @@ retry:
 update:
   backend: auto                     # podman if installed, else lxd; or podman, lxd, lxd-vm
   image: public.ecr.aws/ubuntu/ubuntu:latest   # podman image
-  lxd_image: ubuntu:24.04           # LXD image for containers and virtual machines
+  lxd_image: ubuntu:26.04           # LXD image for containers and virtual machines
   max_iterations: 80                # tool calls per agent run
   exec_timeout: 300                 # seconds per command in the container
   confirmations: 4                  # confirmation agents at once (default: half the CPUs)
@@ -216,6 +216,7 @@ The `ax` tool also contains these other commands:
 - `ax update charmcraft`
 - `ax update rockcraft`
 - `ax update go:golang.org/x/net`
+- `ax update juju` (a project subject with an `update:` block, see below)
 - `ax subjects`
 - `ax init`
 - `ax setup`
@@ -224,9 +225,10 @@ The `ax` tool also contains these other commands:
 repository (a directory with an `axiomaton.cnf` or `axiomlog`), then the
 repository root, then the user wide log. `-l <axiomlog>` overrides the target.
 
-The update command only works for built-in subjects: `go`, `python`, `rust`,
+The update command works for built-in subjects: `go`, `python`, `rust`,
 `zig`, `snapcraft`, `charmcraft`, `rockcraft`, and `go:<module path>` for any
-Go module. All subject updates are performed as such, firstly, a sandboxed
+Go module, and for project subjects that carry an update brief (see
+[Custom subjects](#custom-subjects)). All subject updates are performed as such, firstly, a sandboxed
 agent is run (using github.com/microsoft/agent-framework-go, with tool calls
 running inside a fresh instance), to update the axiomlog
 based on go's release notes. The instance is a podman container when podman
@@ -299,6 +301,55 @@ rockcraft, packing small rocks. The shipped
 module logs live under `internal/subjects/gomod/seeds/<module path>/axiomlog`,
 e.g. `ax update go:golang.org/x/net -l internal/subjects/gomod/seeds/golang.org/x/net/axiomlog`;
 adding a directory with an `axiomlog` there ships another module.
+
+### Custom subjects
+
+Any subject declared in `axiomaton.cnf` can be updated by the same agents
+once its entry carries an `update:` block. The block is the research brief:
+what the subject is, where its truth lives and how to prepare the sandbox.
+Everything else (the sandbox, the proxy, proposing, confirming, corrections,
+splits, review, the epoch floor) is exactly as for built-in subjects.
+
+```yaml
+subjects:
+  - name: juju
+    clock: [3.6.4]
+    shape: [{name: version, kind: semver}]
+    update:
+      about: >
+        Juju, the application orchestration engine. Axioms are what a charm
+        author or an operator driving the juju CLI needs to know: CLI and
+        model config changes, charm and relation semantics, supported bases.
+      sources:
+        - https://github.com/juju/juju/releases
+        - https://documentation.ubuntu.com/juju/3.6/
+        - ../juju                      # a local checkout, shipped into the sandbox
+      setup: snap install juju --classic   # optional, run in every fresh sandbox
+      clock: the Juju release the statement holds from, without a leading v   # optional
+      verify: a ready `juju bootstrap localhost` is the fastest check          # optional
+      vm: false                        # optional, forces the lxd-vm backend
+```
+
+`about` and at least one source are required, and the subject needs a
+declared clock shape. Sources are listed most authoritative first. An https
+URL is fetched through the cache proxy (git over https is mirrored like any
+other repository). A path is a local git checkout, relative to the config
+file: because the sandbox has no access to the host, it is packed with
+`git bundle` before each run, pushed to `/work/src/<dir>.bundle` and the
+agents are told to clone it from there. SSH remotes and plain http are
+refused when the file is read. `setup` runs once in every sandbox, with the
+proxy environment, before the update agent and before each confirmation
+agent; a failing setup aborts the run. `clock` adds to the generated
+description of each dimension (its name and kind), and `verify` is extra
+guidance for the confirmation agent. `vm: true` runs the agents in an LXD
+virtual machine. The nearest `axiomaton.cnf` declaring the subject wins, as
+for shapes, and `ax subjects` marks such subjects `updatable`. A built-in
+subject cannot be given a brief.
+
+For a `git` clock the agent has no version to name releases by, so it gets
+the same `batch_commits` tool as untagged Go modules, naming each batch by
+the full hash of its last commit: that hash is the clock value, the batch's
+date is the time, and the shape's `repo` orders the axioms on the host.
 
 ### Cache proxy and network isolation
 

@@ -15,9 +15,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -37,6 +39,62 @@ type SubjectRef struct {
 	Clock []string
 	// Shape optionally declares the sub-clock dimensions inline.
 	Shape []axiom.ClockShape
+	// Update is the research brief that lets ax update extend a subject
+	// that is not built in. Nil means the subject is maintained by hand.
+	Update *UpdateDef
+}
+
+// UpdateDef tells the update agent what a custom subject is, where its
+// truth lives and how to prepare the sandbox. Everything else about an
+// update (the sandbox, the proxy, proposing, confirming, review) is the
+// same for every subject.
+type UpdateDef struct {
+	// About says what the subject is and what its axioms are for, in a
+	// sentence or two. It is the only description the agents get.
+	About string `yaml:"about"`
+	// Sources are release notes, documentation, registries or repositories
+	// the agents work from, most authoritative first: https URLs, or paths
+	// to local git checkouts (relative to the project file), which are
+	// shipped into the sandbox as git bundles. SSH remotes cannot be used.
+	Sources []string `yaml:"sources"`
+	// Setup is a shell command run in every fresh sandbox before an agent
+	// starts, for example to install the tool under study.
+	Setup string `yaml:"setup,omitempty"`
+	// Clock explains how to fill the clock values, in addition to what the
+	// shape says, e.g. "the release the statement holds from, without v".
+	Clock string `yaml:"clock,omitempty"`
+	// Verify is extra guidance for the confirmation agent.
+	Verify string `yaml:"verify,omitempty"`
+	// VM runs the agents in an LXD virtual machine rather than a container.
+	VM bool `yaml:"vm,omitempty"`
+}
+
+// Validate checks that the brief has what the agents need.
+func (d UpdateDef) Validate() error {
+	if strings.TrimSpace(d.About) == "" {
+		return errors.New("update.about is required: say what the subject is and what its axioms are for")
+	}
+	if len(d.Sources) == 0 {
+		return errors.New("update.sources is required: list at least one https URL or local git checkout")
+	}
+	for _, s := range d.Sources {
+		s = strings.TrimSpace(s)
+		switch {
+		case s == "":
+			return errors.New("update.sources has an empty entry")
+		case strings.HasPrefix(s, "ssh://") || strings.HasPrefix(s, "git@") || strings.HasPrefix(s, "git+ssh://"):
+			return fmt.Errorf("update source %q uses SSH, which the sandbox cannot reach; use an https URL or a local checkout", s)
+		case strings.HasPrefix(s, "http://"):
+			return fmt.Errorf("update source %q is plain http; use https", s)
+		}
+	}
+	return nil
+}
+
+// IsLocalSource reports whether an update source is a filesystem path
+// rather than a URL.
+func IsLocalSource(s string) bool {
+	return !strings.Contains(s, "://")
 }
 
 // UnmarshalYAML accepts either the compact list form [name, v1, v2] or the
@@ -58,9 +116,10 @@ func (s *SubjectRef) UnmarshalYAML(n *yaml.Node) error {
 		return n.Decode(&s.Name)
 	case yaml.MappingNode:
 		var m struct {
-			Name  string             `yaml:"name"`
-			Clock []string           `yaml:"clock"`
-			Shape []axiom.ClockShape `yaml:"shape"`
+			Name   string             `yaml:"name"`
+			Clock  []string           `yaml:"clock"`
+			Shape  []axiom.ClockShape `yaml:"shape"`
+			Update *UpdateDef         `yaml:"update"`
 		}
 		if err := n.Decode(&m); err != nil {
 			return err
@@ -68,7 +127,7 @@ func (s *SubjectRef) UnmarshalYAML(n *yaml.Node) error {
 		if m.Name == "" {
 			return fmt.Errorf("line %d: subject has no name", n.Line)
 		}
-		s.Name, s.Clock, s.Shape = m.Name, m.Clock, m.Shape
+		s.Name, s.Clock, s.Shape, s.Update = m.Name, m.Clock, m.Shape, m.Update
 		return nil
 	}
 	return fmt.Errorf("line %d: subject must be a list or mapping", n.Line)
@@ -104,6 +163,18 @@ func LoadProject(path string) (Project, error) {
 	for i := range p.Subjects {
 		for j := range p.Subjects[i].Shape {
 			p.Subjects[i].Shape[j].Repo = resolveRepo(p.Dir, p.Subjects[i].Shape[j])
+		}
+		if u := p.Subjects[i].Update; u != nil {
+			if err := u.Validate(); err != nil {
+				return Project{}, fmt.Errorf("%s: subject %s: %w", path, p.Subjects[i].Name, err)
+			}
+			for k, s := range u.Sources {
+				s = strings.TrimSpace(s)
+				if IsLocalSource(s) && !filepath.IsAbs(s) {
+					s = filepath.Join(p.Dir, s)
+				}
+				u.Sources[k] = s
+			}
 		}
 	}
 	return p, nil

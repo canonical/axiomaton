@@ -168,9 +168,34 @@ func TestCLI(t *testing.T) {
 	if err := run(context.Background(), []string{"bogus"}, &out2, &err2); err == nil {
 		t.Fatal("unknown command should fail")
 	}
-	if _, _, err := exec("update", "nim"); err == nil || !strings.Contains(err.Error(), "built-in") {
+	if _, _, err := exec("update", "nim"); err == nil || !strings.Contains(err.Error(), "built-in") || strings.Contains(err.Error(), "update brief (") {
 		t.Fatalf("update nim: %v", err)
 	}
+	// A project subject needs an update brief before an agent can extend it.
+	if _, _, err := exec("update", "svc"); err == nil || !strings.Contains(err.Error(), `"svc" is declared in`) || !strings.Contains(err.Error(), "without an update: block") {
+		t.Fatalf("update svc: %v", err)
+	}
+	cnf := "subjects:\n  - [go, 1.26.1]\n  - name: svc\n    clock: [2.3.0]\n    shape: [{name: version, kind: semver}]\n    update: {about: a service, sources: [https://example.com/releases]}\n  - name: noshape\n    update: {about: shapeless, sources: [https://example.com]}\n"
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte(cnf), 0o644)
+	if _, _, err := exec("update", "nim"); err == nil || !strings.Contains(err.Error(), "update brief (svc, noshape)") {
+		t.Fatalf("update nim lists custom subjects: %v", err)
+	}
+	if _, _, err := exec("update", "noshape"); err == nil || !strings.Contains(err.Error(), "no clock shape") {
+		t.Fatalf("update noshape: %v", err)
+	}
+	if out, _, err := exec("subjects"); err != nil || !strings.Contains(out, "svc\tshape [version:semver]\t2 axiom(s)\tdefault @ 2.3.0\tupdatable") || strings.Contains(out, "go\tshape [version:goversion]\t") && strings.Contains(out, "goversion]\t0 axiom(s)\tupdatable") {
+		t.Fatalf("subjects marks updatable project subjects: %v\n%s", err, out)
+	}
+	// With a usable brief the next failure is the missing agent model.
+	if _, _, err := exec("update", "svc"); err == nil || strings.Contains(err.Error(), "svc") {
+		t.Fatalf("update svc with a brief should get past subject resolution: %v", err)
+	}
+	// Built-ins cannot be given a brief.
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - name: go\n    update: {about: go, sources: [https://go.dev]}\n"), 0o644)
+	if _, _, err := exec("update", "go"); err == nil || !strings.Contains(err.Error(), "built-in subject that ax updates by itself") {
+		t.Fatalf("update go with a brief: %v", err)
+	}
+	os.WriteFile(filepath.Join(repo, "axiomaton.cnf"), []byte("subjects:\n  - [go, 1.26.1]\n  - name: svc\n    clock: [2.3.0]\n    shape: [{name: version, kind: semver}]\n"), 0o644)
 }
 
 func TestInit(t *testing.T) {

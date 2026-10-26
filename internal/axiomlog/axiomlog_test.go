@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/canonical/axiomaton/internal/axiom"
+	"github.com/canonical/axiomaton/internal/config"
 )
 
 func mk(subject, date, ver, stmt string) axiom.Axiom {
@@ -169,5 +170,34 @@ func TestDiscover(t *testing.T) {
 	ws, _ = Discover(loose)
 	if target, _ := ws.WriteTarget(); target != filepath.Join(root, "xdg", "axiomaton", "axiomlog") {
 		t.Fatalf("loose target = %q", target)
+	}
+}
+
+func TestProjectSubject(t *testing.T) {
+	root := t.TempDir()
+	inner := filepath.Join(root, "repo", "svc")
+	os.MkdirAll(inner, 0o755)
+	os.MkdirAll(filepath.Join(root, "repo", ".git"), 0o755)
+	os.WriteFile(filepath.Join(root, config.ProjectFile), []byte("subjects:\n  - name: juju\n    shape: [{name: version, kind: semver}]\n    update: {about: outer, sources: [https://outer]}\n  - name: top\n    update: {about: top, sources: [https://top]}\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "repo", config.ProjectFile), []byte("subjects:\n  - name: juju\n    shape: [{name: version, kind: semver}]\n    update: {about: inner, sources: [https://inner]}\n  - plain\n"), 0o644)
+	ws, err := Discover(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, file, ok := ws.ProjectSubject("juju")
+	if !ok || ref.Update == nil || ref.Update.About != "inner" || file != filepath.Join(root, "repo", config.ProjectFile) {
+		t.Fatalf("nearest wins: %+v %s %v", ref, file, ok)
+	}
+	if ref, _, ok := ws.ProjectSubject("plain"); !ok || ref.Update != nil {
+		t.Fatalf("plain: %+v %v", ref, ok)
+	}
+	if ref, file, ok := ws.ProjectSubject("top"); !ok || ref.Update.About != "top" || file != filepath.Join(root, config.ProjectFile) {
+		t.Fatalf("outer layers count: %+v %s %v", ref, file, ok)
+	}
+	if _, _, ok := ws.ProjectSubject("nope"); ok {
+		t.Fatal("undeclared")
+	}
+	if got := strings.Join(ws.Updatable(), ","); got != "juju,top" {
+		t.Fatalf("updatable: %s", got)
 	}
 }

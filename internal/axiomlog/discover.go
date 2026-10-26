@@ -148,6 +148,42 @@ func (ws *Workspace) DefaultSubjects(global bool) []config.SubjectRef {
 	return out
 }
 
+// ProjectSubject finds the nearest project file declaring name and returns
+// that declaration and the file it came from. All layers are consulted, as
+// they are for clock shapes.
+func (ws *Workspace) ProjectSubject(name string) (config.SubjectRef, string, bool) {
+	for _, l := range ws.Layers {
+		if l.Project == nil {
+			continue
+		}
+		for _, s := range l.Project.Subjects {
+			if s.Name == name {
+				return s, filepath.Join(l.Dir, config.ProjectFile), true
+			}
+		}
+	}
+	return config.SubjectRef{}, "", false
+}
+
+// Updatable lists the names of project subjects that carry an update brief,
+// nearest declaration first.
+func (ws *Workspace) Updatable() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, l := range ws.Layers {
+		if l.Project == nil {
+			continue
+		}
+		for _, s := range l.Project.Subjects {
+			if s.Update != nil && !seen[s.Name] {
+				seen[s.Name] = true
+				out = append(out, s.Name)
+			}
+		}
+	}
+	return out
+}
+
 // Load reads every discovered log plus the user log, outermost first so
 // nearer logs shadow duplicates.
 func (ws *Workspace) Load(builtin ...[]axiom.Axiom) ([]axiom.Axiom, error) {

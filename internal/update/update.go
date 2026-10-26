@@ -224,6 +224,67 @@ func (u *Updater) subject() axiom.Subject {
 	return subjects.AxiomSubject(u.Subject)
 }
 
+// Shipment is a host file to copy into every sandbox before an agent runs.
+type Shipment struct {
+	Local  string
+	Remote string
+}
+
+// Prepared is implemented by subjects whose sandboxes need files shipped
+// in or a command run before each agent starts, such as custom subjects
+// with local repositories or an install step.
+type Prepared interface {
+	// Shipments lists the files to push, in order.
+	Shipments() []Shipment
+	// Setup is a shell command to run once the files are in place, or "".
+	Setup() string
+}
+
+// SetupTimeout bounds a subject's setup command.
+const SetupTimeout = 15 * time.Minute
+
+// prepare pushes the subject's shipments and runs its setup command.
+func (u *Updater) prepare(ctx context.Context, c Container) error {
+	p, ok := u.Subject.(Prepared)
+	if !ok {
+		return nil
+	}
+	for _, s := range p.Shipments() {
+		u.logf("shipping %s to %s", s.Local, s.Remote)
+		if err := c.Push(ctx, s.Local, s.Remote); err != nil {
+			return fmt.Errorf("shipping %s: %w", s.Local, err)
+		}
+	}
+	if cmd := strings.TrimSpace(p.Setup()); cmd != "" {
+		u.logf("running setup: %s", oneLine(cmd, 200))
+		res, err := c.Exec(ctx, cmd, SetupTimeout)
+		if err != nil {
+			return fmt.Errorf("setup: %w", err)
+		}
+		if res.TimedOut {
+			return fmt.Errorf("setup timed out after %s", SetupTimeout)
+		}
+		if res.ExitCode != 0 {
+			tail := strings.TrimSpace(res.Stderr)
+			if tail == "" {
+				tail = strings.TrimSpace(res.Stdout)
+			}
+			return fmt.Errorf("setup exited %d: %s", res.ExitCode, oneLine(tail, 400))
+		}
+	}
+	return nil
+}
+
+// hasGitClock reports whether any dimension of the shape is git ordered.
+func hasGitClock(shape []axiom.ClockShape) bool {
+	for _, d := range shape {
+		if d.Kind == axiom.KindGit {
+			return true
+		}
+	}
+	return false
+}
+
 // Propose runs the update agent in a fresh container and returns the axioms
 // it proposed along with its closing summary.
 func (u *Updater) Propose(ctx context.Context, existing []axiom.Axiom) ([]axiom.Axiom, string, error) {
@@ -232,6 +293,9 @@ func (u *Updater) Propose(ctx context.Context, existing []axiom.Axiom) ([]axiom.
 		return nil, "", err
 	}
 	defer c.Close(ctx)
+	if err := u.prepare(ctx, c); err != nil {
+		return nil, "", err
+	}
 
 	props := NewProposals(u.subject(), existing)
 	shell, err := ShellTool(c, u.ExecTimeout, u.Log)
@@ -245,6 +309,12 @@ func (u *Updater) Propose(ctx context.Context, existing []axiom.Axiom) ([]axiom.
 	tools := []tool.Tool{shell, propose}
 	if _, ok := u.Subject.(gomod.Subject); ok {
 		batch, err := BatchTool(u.Log)
+		if err != nil {
+			return nil, "", err
+		}
+		tools = append(tools, batch)
+	} else if hasGitClock(u.Subject.Shape()) {
+		batch, err := CommitBatchTool(u.Log)
 		if err != nil {
 			return nil, "", err
 		}
@@ -265,6 +335,9 @@ func (u *Updater) Confirm(ctx context.Context, a axiom.Axiom) (Verdict, error) {
 		return Verdict{}, err
 	}
 	defer c.Close(ctx)
+	if err := u.prepare(ctx, c); err != nil {
+		return Verdict{}, err
+	}
 	shell, err := ShellTool(c, u.ExecTimeout, u.Log)
 	if err != nil {
 		return Verdict{}, err

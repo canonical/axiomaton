@@ -37,6 +37,7 @@ import (
 	"github.com/canonical/axiomaton/internal/proxy"
 	"github.com/canonical/axiomaton/internal/query"
 	"github.com/canonical/axiomaton/internal/subjects"
+	"github.com/canonical/axiomaton/internal/subjects/custom"
 	"github.com/canonical/axiomaton/internal/update"
 )
 
@@ -69,8 +70,10 @@ Commands:
   update    Run sandboxed agents (podman, or LXD containers or VMs) to
             extend the log of a built-in subject (go, python, rust, zig,
             snapcraft, charmcraft, rockcraft, or go:<module> for a Go
-            module dependency). The three *craft subjects need an LXD
-            virtual machine.
+            module dependency) or of a project subject whose entry in
+            axiomaton.cnf has an update: block (about, sources, and
+            optionally setup, clock, verify, vm). The three *craft
+            subjects need an LXD virtual machine.
   subjects  List known subjects and where they come from.
   init      Write an axiomaton.cnf for this project listing the built-in
             subjects detected here (go and one go:<module> subject per
@@ -95,6 +98,8 @@ type app struct {
 	stdout io.Writer
 
 	proxy *proxy.Server
+	// cleanup runs at shutdown, last added first.
+	cleanup []func()
 }
 
 func main() {
@@ -508,11 +513,11 @@ func (a *app) update(ctx context.Context, args []string) error {
 		fs.Usage()
 		return errors.New("update: exactly one subject is required")
 	}
-	builtin, ok := subjects.Lookup(rest[0])
-	if !ok {
-		return fmt.Errorf("update only supports built-in subjects (%s); %q is not one", strings.Join(subjects.Names(), ", "), rest[0])
-	}
 	e, err := a.load()
+	if err != nil {
+		return err
+	}
+	builtin, err := a.updatable(ctx, e, rest[0])
 	if err != nil {
 		return err
 	}
@@ -612,6 +617,53 @@ func (a *app) update(ctx context.Context, args []string) error {
 	return nil
 }
 
+// updatable resolves the subject ax update works on: a built-in, or a
+// project subject whose declaration carries an update brief. Local sources
+// of a custom subject are bundled now, into a directory removed at shutdown.
+func (a *app) updatable(ctx context.Context, e *env, name string) (subjects.Builtin, error) {
+	ref, file, declared := e.ws.ProjectSubject(name)
+	if b, ok := subjects.Lookup(name); ok {
+		if declared && ref.Update != nil {
+			return nil, fmt.Errorf("%s declares an update brief for %q, but it is a built-in subject that ax updates by itself; remove the update: block", file, name)
+		}
+		return b, nil
+	}
+	if !declared {
+		msg := fmt.Sprintf("%q is not a built-in subject (%s)", name, strings.Join(subjects.Names(), ", "))
+		if custom := e.ws.Updatable(); len(custom) > 0 {
+			msg += fmt.Sprintf(" or a project subject with an update brief (%s)", strings.Join(custom, ", "))
+		} else {
+			msg += "; a project subject can be updated once its declaration in " + config.ProjectFile + " has an update: block with about and sources"
+		}
+		return nil, errors.New(msg)
+	}
+	if ref.Update == nil {
+		return nil, fmt.Errorf("subject %q is declared in %s without an update: block; add one with at least about and sources to update it with an agent", name, file)
+	}
+	shape, ok := e.reg.Lookup(name)
+	if !ok {
+		return nil, fmt.Errorf("subject %q in %s has no clock shape; declare one inline or under shapes: before updating it", name, file)
+	}
+	s, err := custom.New(name, shape.Shape, *ref.Update)
+	if err != nil {
+		return nil, err
+	}
+	if len(s.LocalSources()) > 0 {
+		dir, err := os.MkdirTemp("", "ax-bundles-*")
+		if err != nil {
+			return nil, err
+		}
+		a.cleanup = append(a.cleanup, func() { os.RemoveAll(dir) })
+		for _, src := range s.LocalSources() {
+			a.logf("bundling %s for the sandbox", src)
+		}
+		if err := s.Bundle(ctx, dir); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
 // agentParts builds the runtime and framework agent used by the
 // sandboxed commands. The backend comes from the configuration (podman if
 // installed, else LXD) unless needVM asks for an LXD virtual machine. An
@@ -654,6 +706,10 @@ func (a *app) shutdown() {
 	if a.proxy != nil {
 		a.proxy.Close()
 	}
+	for i := len(a.cleanup) - 1; i >= 0; i-- {
+		a.cleanup[i]()
+	}
+	a.cleanup = nil
 }
 
 // cacheProxy builds (once per process) the caching proxy containers use.
@@ -711,12 +767,19 @@ func (a *app) subjects(_ context.Context, args []string) error {
 	for n := range names {
 		sorted = append(sorted, n)
 	}
+	updatable := map[string]bool{}
+	for _, n := range e.ws.Updatable() {
+		updatable[n] = true
+	}
 	sortStrings(sorted)
 	for _, n := range sorted {
 		subj, _ := e.reg.Lookup(n)
 		line := fmt.Sprintf("%s\tshape %s\t%d axiom(s)", n, describeShape(subj.Shape), counts[n])
 		if clock, ok := defaults[n]; ok {
 			line += "\tdefault @ " + clock
+		}
+		if updatable[n] {
+			line += "\tupdatable"
 		}
 		var from []string
 		for o := range origins[n] {
