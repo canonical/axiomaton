@@ -60,6 +60,10 @@ ax since 2025-08-01                 # changes since a date
 ax for openai/gpt-5-mini            # changes since a model's knowledge cutoff
 ```
 
+[EXAMPLE.md](EXAMPLE.md) shows the report this produces: one section per
+subject, listing the facts that changed or were added after the cutoff,
+each with the release it holds from.
+
 `ax init` records those subjects in an `axiomaton.cnf` in the project so
 they can be pinned, extended with subjects of your own, or committed. Run it
 again after adding dependencies; existing entries are kept.
