@@ -97,7 +97,7 @@ Commands:
             "**end of axiom changes**" line. The model or date and the
             file are asked once and remembered per project in ax.cnf,
             whose sync section can also hold defaults for new projects.
-            The file must be outside git or ignored by it.
+            A file that git would commit draws a warning.
 
 Global flags:
 `
