@@ -169,11 +169,11 @@ providers:
     base_url: https://openrouter.ai/api
     api_key_env: OPENROUTER_API_KEY # or api_key: sk-or-...
 models:
-  embedding: {model: openai/text-embedding-3-small}
+  embedding: {model: perplexity/pplx-embed-v1-4b}
   rerank:    {model: cohere/rerank-v3.5}        # optional
   decision:  {model: typesafe/jev-1.13}         # OpenRouter Decisions API
-  summary:   {model: openai/gpt-5-mini}
-  agent:     {model: anthropic/claude-sonnet-4.5}
+  summary:   {model: openai/gpt-oss-120b}
+  agent:     {model: openai/gpt-6-luna-pro}
 summary_budget: 1500                # tokens
 search:
   candidates: 8                     # nearest neighbours per axiom
