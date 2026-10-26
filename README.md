@@ -107,6 +107,12 @@ release-specific axioms newer than a release given explicitly.
 Give an explicit clock to pin a version instead. Further built-in subjects can
 be named as arguments, e.g. `ax init go go:golang.org/x/text`, and
 dependencies you do not want reported on can simply be deleted from the file.
+Running `ax init` again on a project that already has an `axiomaton.cnf`
+updates it in place: subjects detected or requested that the file does not
+list yet are appended, with their detection comment, and everything else,
+including hand-written subjects, shapes, update briefs and comments, is kept.
+A built-in subject the file lists without a clock that is no longer detected
+is pointed out, not removed. `-force` replaces the file instead.
 
 `go:<module>` subjects are a built-in *family*: any valid module path
 after the prefix is a subject with a `version` clock of kind `semver`, with no
@@ -153,8 +159,13 @@ and a model for each role, writes the file and then sends a tiny request to
 each configured model (and looks for podman) to confirm everything works.
 Every answer has a flag (`-base-url`, `-key` or `-key-env`, `-embedding`,
 `-rerank`, `-decision`, `-summary`, `-agent`, `-image`), `-y` accepts the
-defaults without prompting, `-force` replaces an existing file and `-no-check`
-skips the connectivity test. A key given with `-key` is stored in the file,
+defaults without prompting and `-no-check` skips the connectivity test. An
+existing `ax.cnf` is updated rather than replaced: on a terminal, after a
+confirmation, the prompts offer its current values (`-force` skips the
+confirmation); any value flag turns the run into a targeted update that
+changes only the fields named, asks nothing and keeps the rest, so
+`ax setup -agent openai/gpt-6-luna-pro` swaps one model. The run reports each
+field it changed. A key given with `-key` is stored in the file,
 which is then made readable by the owner only; otherwise the key is read from
 the environment variable at run time. The file defines
 the model configuration for each model used, e.g. provider (e.g. OpenRouter),

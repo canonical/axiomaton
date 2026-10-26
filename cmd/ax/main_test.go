@@ -234,9 +234,59 @@ func TestInit(t *testing.T) {
 	if !strings.Contains(string(cnf), "  - go  # detected: ../go.mod says 1.26.1") || !strings.Contains(string(cnf), "  - go:golang.org/x/net  # detected: ../go.mod says v0.50.0") {
 		t.Fatalf("cnf:\n%s", cnf)
 	}
-	if _, _, err := exec(filepath.Join(repo, "pkg"), "init"); err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("second init: %v", err)
+	// A second init finds nothing new and leaves the file alone.
+	_, errOut, err = exec(filepath.Join(repo, "pkg"), "init")
+	if err != nil || !strings.Contains(errOut, "is up to date (") || !strings.Contains(errOut, "nothing written") {
+		t.Fatalf("second init: %v\n%s", err, errOut)
 	}
+	if again, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf")); string(again) != string(cnf) {
+		t.Fatalf("file changed by an up to date init:\n%s", again)
+	}
+	// Hand edits survive an update that adds a requested subject.
+	custom := "  - name: juju\n    clock: [3.6.4]\n    shape: [{name: version, kind: semver}]\n    update:\n      about: Juju, the engine.\n      sources: [https://github.com/juju/juju/releases]\n"
+	edited := strings.Replace(string(cnf), "subjects:\n", "subjects:\n"+custom, 1) + "shapes:\n  tree:\n    - {name: commit, kind: git, repo: ../tree}  # keep me\n"
+	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte(edited), 0o644)
+	_, errOut, err = exec(filepath.Join(repo, "pkg"), "init", "rust")
+	if err != nil || !strings.Contains(errOut, "updated "+filepath.Join(repo, "pkg", "axiomaton.cnf")) || !strings.Contains(errOut, "ax:   + rust") || strings.Contains(errOut, "+ go") {
+		t.Fatalf("init rust: %v\n%s", err, errOut)
+	}
+	updated, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf"))
+	for _, want := range []string{
+		"# axiomaton.cnf: the subjects this project depends on.",
+		// yaml.v3 quotes the URL for its colon; the file is otherwise as written.
+		"  - name: juju\n    clock: [3.6.4]\n    shape: [{name: version, kind: semver}]\n    update:\n      about: Juju, the engine.\n      sources: ['https://github.com/juju/juju/releases']\n",
+		"  - go # detected: ../go.mod says 1.26.1\n",
+		"  - go:golang.org/x/net # detected: ../go.mod says v0.50.0\n",
+		"  - rust # requested; clock is detected at query time when possible\n",
+		"# Other subjects need a clock shape before clocked axioms can be added:\n",
+		"shapes:\n  tree:\n    - {name: commit, kind: git, repo: ../tree} # keep me\n",
+	} {
+		if !strings.Contains(string(updated), want) {
+			t.Fatalf("updated cnf lacks %q:\n%s", want, updated)
+		}
+	}
+	if _, _, err := exec(filepath.Join(repo, "pkg"), "since", "2025-08-01"); err != nil {
+		t.Fatalf("updated cnf must still load: %v", err)
+	}
+	// Listed built-ins that are no longer detected are pointed out.
+	_, errOut, err = exec(filepath.Join(repo, "pkg"), "init")
+	if err != nil || !strings.Contains(errOut, "lists rust, which is not detected in") || !strings.Contains(errOut, "nothing written") {
+		t.Fatalf("stale subject warning: %v\n%s", err, errOut)
+	}
+	// A broken file is not touched.
+	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), []byte("subjects: notalist\n"), 0o644)
+	if _, _, err := exec(filepath.Join(repo, "pkg"), "init"); err == nil || !strings.Contains(err.Error(), "-force") {
+		t.Fatalf("broken cnf: %v", err)
+	}
+	// An empty file gains a subjects list.
+	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), nil, 0o644)
+	if _, errOut, err := exec(filepath.Join(repo, "pkg"), "init"); err != nil || !strings.Contains(errOut, "+ go @ 1.26.1") {
+		t.Fatalf("empty cnf: %v\n%s", err, errOut)
+	}
+	if data, _ := os.ReadFile(filepath.Join(repo, "pkg", "axiomaton.cnf")); !strings.HasPrefix(string(data), "subjects:\n  - go # detected") {
+		t.Fatalf("empty cnf result:\n%s", data)
+	}
+	os.WriteFile(filepath.Join(repo, "pkg", "axiomaton.cnf"), cnf, 0o644)
 	if _, _, err := exec(filepath.Join(repo, "pkg"), "init", "-force", "nim"); err == nil || !strings.Contains(err.Error(), "not a built-in subject") {
 		t.Fatalf("init nim: %v", err)
 	}

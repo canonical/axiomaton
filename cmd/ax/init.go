@@ -24,18 +24,30 @@ import (
 	"path/filepath"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/canonical/axiomaton/internal/config"
 	"github.com/canonical/axiomaton/internal/subjects"
 )
 
+// initEntry is one subject init adds to the project file.
+type initEntry struct {
+	name    string
+	comment string
+	summary string
+}
+
 // init writes an axiomaton.cnf (and an empty axiomlog) for the working
 // directory, listing the built-in subjects detected there. Detected subjects
 // are written without a clock so the project's version is read from its
-// own files, such as go.mod, at query time.
+// own files, such as go.mod, at query time. An existing file is updated in
+// place: subjects detected or requested that it does not list yet are
+// appended and everything else, including hand-written subjects and
+// comments, is kept; -force replaces it instead.
 func (a *app) init(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("ax init", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
-	force := fs.Bool("force", false, "replace an existing axiomaton.cnf")
+	force := fs.Bool("force", false, "replace an existing axiomaton.cnf instead of adding to it")
 	fs.Usage = func() {
 		fmt.Fprintln(a.stderr, "usage: ax init [-force] [built-in subject...]")
 		fs.PrintDefaults()
@@ -46,21 +58,15 @@ func (a *app) init(_ context.Context, args []string) error {
 	}
 
 	cnfPath := filepath.Join(a.dir, config.ProjectFile)
-	if _, err := os.Stat(cnfPath); err == nil && !*force {
-		return fmt.Errorf("%s already exists; use -force to replace it", cnfPath)
-	}
+	_, statErr := os.Stat(cnfPath)
+	exists := statErr == nil
 
-	type entry struct {
-		name    string
-		comment string
-		summary string
-	}
-	var entries []entry
+	var entries []initEntry
 	seen := map[string]bool{}
 	for _, d := range subjects.Detect(a.dir) {
 		seen[d.Subject.Name()] = true
 		src := shortenFrom(a.dir, d.Source)
-		e := entry{
+		e := initEntry{
 			name:    d.Subject.Name(),
 			comment: fmt.Sprintf("detected: %s says %s", src, strings.Join(d.Clock, " ")),
 			summary: fmt.Sprintf("%s @ %s (from %s)", d.Subject.Name(), strings.Join(d.Clock, " "), src),
@@ -79,7 +85,14 @@ func (a *app) init(_ context.Context, args []string) error {
 			return fmt.Errorf("%q is not a built-in subject (%s); declare it by hand with a clock shape in %s", name, strings.Join(subjects.Names(), ", "), config.ProjectFile)
 		}
 		seen[name] = true
-		entries = append(entries, entry{name: name, comment: "requested; clock is detected at query time when possible", summary: name})
+		entries = append(entries, initEntry{name: name, comment: "requested; clock is detected at query time when possible", summary: name})
+	}
+
+	if exists && !*force {
+		if err := a.updateProject(cnfPath, entries, rest); err != nil {
+			return err
+		}
+		return a.initTail(cnfPath)
 	}
 
 	var b bytes.Buffer
@@ -117,7 +130,110 @@ func (a *app) init(_ context.Context, args []string) error {
 	for _, e := range entries {
 		fmt.Fprintf(a.stderr, "ax:   %s\n", e.summary)
 	}
+	return a.initTail(cnfPath)
+}
 
+// updateProject adds the entries that cnfPath does not list yet to its
+// subjects, keeping the rest of the file as it is. requested names the
+// subjects given on the command line, which are never reported as stale.
+func (a *app) updateProject(cnfPath string, entries []initEntry, requested []string) error {
+	project, err := config.LoadProject(cnfPath)
+	if err != nil {
+		return fmt.Errorf("%w; fix the file or use -force to replace it", err)
+	}
+	data, err := os.ReadFile(cnfPath)
+	if err != nil {
+		return err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parse %s: %w", cnfPath, err)
+	}
+	if doc.Kind == 0 || len(doc.Content) == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("%s is not a YAML mapping; use -force to replace it", cnfPath)
+	}
+	var seq *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "subjects" {
+			continue
+		}
+		v := root.Content[i+1]
+		switch {
+		case v.Kind == yaml.SequenceNode:
+			seq = v
+		case v.Kind == yaml.ScalarNode && v.Tag == "!!null":
+			*v = yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+			seq = v
+		default:
+			return fmt.Errorf("%s: subjects is not a list; use -force to replace the file", cnfPath)
+		}
+	}
+	if seq == nil {
+		seq = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "subjects"}, seq)
+	}
+	// Block style keeps one entry per line with its comment; a file that
+	// wrote subjects: [go, rust] inline is rewritten one per line.
+	seq.Style = 0
+
+	listed := map[string]bool{}
+	for _, s := range project.Subjects {
+		listed[s.Name] = true
+	}
+	var added []initEntry
+	for _, e := range entries {
+		if listed[e.name] {
+			continue
+		}
+		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: e.name, LineComment: "# " + e.comment})
+		added = append(added, e)
+	}
+
+	// Built-in subjects the file lists without a clock that nothing here
+	// detects any more report every release; say so.
+	current := map[string]bool{}
+	for _, e := range entries {
+		current[e.name] = true
+	}
+	for _, r := range requested {
+		current[r] = true
+	}
+	for _, s := range project.Subjects {
+		if _, builtin := subjects.Lookup(s.Name); builtin && len(s.Clock) == 0 && !current[s.Name] {
+			a.warnf("%s lists %s, which is not detected in %s any more; remove it or pin a clock", shortenFrom(a.dir, cnfPath), s.Name, a.dir)
+		}
+	}
+
+	if len(added) == 0 {
+		fmt.Fprintf(a.stderr, "ax: %s is up to date (%d subject(s) listed); nothing written\n", cnfPath, len(project.Subjects))
+		return nil
+	}
+	var b bytes.Buffer
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return err
+	}
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	if err := os.WriteFile(cnfPath, b.Bytes(), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stderr, "ax: updated %s\n", cnfPath)
+	for _, e := range added {
+		fmt.Fprintf(a.stderr, "ax:   + %s\n", e.summary)
+	}
+	return nil
+}
+
+// initTail creates the project's axiomlog when missing and points at ax
+// setup when there is no user configuration yet.
+func (a *app) initTail(cnfPath string) error {
 	logPath := filepath.Join(a.dir, config.LogFile)
 	if _, err := os.Stat(logPath); errors.Is(err, os.ErrNotExist) {
 		header := "# axiomlog: one JSON object per line, appended by `ax add` and `ax update`.\n"

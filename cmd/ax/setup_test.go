@@ -104,9 +104,28 @@ func TestSetup(t *testing.T) {
 		t.Fatalf("probed paths: %v", *paths)
 	}
 
-	// Existing file: refuse without -force when not interactive.
-	if _, _, err := exec("", false, "-y"); err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("expected already exists error, got %v", err)
+	// Existing file, nothing to change: rewritten as it was.
+	if _, errOut, err := exec("", false, "-y", "-no-check"); err != nil || !strings.Contains(errOut, "rewrote "+path+" with no changes") {
+		t.Fatalf("no-op update: %v\n%s", err, errOut)
+	}
+	// A value flag updates just that field, keeping the stored key.
+	_, errOut, err = exec("", false, "-no-check", "-summary", "openai/other")
+	if err != nil || !strings.Contains(errOut, "updated "+path) || !strings.Contains(errOut, "summary model: openai/gpt-oss-120b -> openai/other") || strings.Contains(errOut, "agent model:") {
+		t.Fatalf("targeted update: %v\n%s", err, errOut)
+	}
+	cfg, _ = config.LoadUser(path)
+	if cfg.Models[config.RoleSummary].Model != "openai/other" || cfg.Models[config.RoleDecision].Model != "typesafe/jev-1.13" {
+		t.Fatalf("targeted update result: %+v", cfg.Models)
+	}
+	if ep, err := cfg.Resolve(config.RoleAgent); err != nil || ep.APIKey != "key" {
+		t.Fatalf("targeted update lost the key: %+v %v", ep, err)
+	}
+	// Even on a terminal a value flag asks nothing.
+	if _, errOut, err := exec("", true, "-no-check", "-rerank", "cohere/x"); err != nil || strings.Contains(errOut, "Reconfigure") || strings.Contains(errOut, "[") || !strings.Contains(errOut, "rerank model: none -> cohere/x") {
+		t.Fatalf("interactive targeted update: %v\n%s", err, errOut)
+	}
+	if _, errOut, err := exec("", false, "-no-check", "-rerank", "-"); err != nil || !strings.Contains(errOut, "rerank model: cohere/x -> none") {
+		t.Fatalf("targeted removal: %v\n%s", err, errOut)
 	}
 
 	// A failing model makes the command fail but the file is still written.

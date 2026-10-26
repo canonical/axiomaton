@@ -82,8 +82,12 @@ Commands:
             from pyproject.toml, setup.py, setup.cfg, Pipfile or
             requirements.txt; zig from build.zig or build.zig.zon;
             snapcraft from snapcraft.yaml; charmcraft from
-            charmcraft.yaml; rockcraft from rockcraft.yaml).
-  setup     Write ax.cnf interactively and test the configured models.
+            charmcraft.yaml; rockcraft from rockcraft.yaml). An existing
+            file gains the subjects it does not list yet and keeps the
+            rest; -force replaces it.
+  setup     Write ax.cnf interactively and test the configured models, or
+            update an existing one: value flags change only the fields
+            they name, and the prompts offer the current values.
 
 Global flags:
 `

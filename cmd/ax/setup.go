@@ -55,7 +55,7 @@ func (a *app) setup(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("ax setup", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	yes := fs.Bool("y", false, "accept defaults and flags without prompting")
-	force := fs.Bool("force", false, "replace an existing ax.cnf without asking")
+	force := fs.Bool("force", false, "rewrite an existing ax.cnf without asking")
 	noCheck := fs.Bool("no-check", false, "do not test the configured models and the agent backend")
 	baseURL := fs.String("base-url", "", "provider base URL (default https://openrouter.ai/api)")
 	key := fs.String("key", "", "API key to store in ax.cnf (default: read from the environment at run time)")
@@ -66,8 +66,9 @@ func (a *app) setup(ctx context.Context, args []string) error {
 		roleFlags[role] = fs.String(role, "", role+` model ("-" for none)`)
 	}
 	fs.Usage = func() {
-		fmt.Fprintln(a.stderr, "usage: ax setup [-y] [-force] [-no-check] [-base-url url] [-key k | -key-env VAR] [-<role> model]...")
+		fmt.Fprintln(a.stderr, "usage: ax setup [-y] [-force] [-no-check] [-base-url url] [-key k | -key-env VAR] [-image ref] [-<role> model]...")
 		fs.PrintDefaults()
+		fmt.Fprintln(a.stderr, "With an existing ax.cnf, value flags change only the fields they name; without flags the prompts offer the current values.")
 	}
 	rest, err := parseInterleaved(fs, args)
 	if err != nil {
@@ -84,12 +85,17 @@ func (a *app) setup(ctx context.Context, args []string) error {
 		return err
 	}
 	exists := cfg.Path != ""
-	p := prompter{raw: stdin, in: bufio.NewReader(stdin), out: a.stderr, ask: !*yes && interactive()}
+	// Flags that name a value turn a run against an existing file into a
+	// targeted update: those fields change, nothing is asked, the rest is
+	// kept.
+	targeted := *baseURL != "" || *key != "" || *keyEnv != "" || *image != ""
+	for _, f := range roleFlags {
+		targeted = targeted || *f != ""
+	}
+	p := prompter{raw: stdin, in: bufio.NewReader(stdin), out: a.stderr, ask: !*yes && interactive() && !(exists && targeted)}
+	before := snapshotUser(cfg)
 
-	if exists && !*force {
-		if !p.ask {
-			return fmt.Errorf("%s already exists; use -force to replace it", path)
-		}
+	if exists && !*force && !targeted && p.ask {
 		ok, err := p.yesNo(path+" already exists. Reconfigure it?", false)
 		if err != nil {
 			return err
@@ -100,7 +106,11 @@ func (a *app) setup(ctx context.Context, args []string) error {
 		}
 	}
 	if p.ask {
-		fmt.Fprintf(a.stderr, "Configuring %s. Press Enter to accept the value in brackets.\n", path)
+		verb := "Configuring"
+		if exists {
+			verb = "Updating"
+		}
+		fmt.Fprintf(a.stderr, "%s %s. Press Enter to accept the value in brackets.\n", verb, path)
 	}
 
 	// Provider.
@@ -140,8 +150,10 @@ func (a *app) setup(ctx context.Context, args []string) error {
 		m := cfg.Models[role]
 		choice := *roleFlags[role]
 		if choice == "" {
+			// A role an existing file leaves unconfigured stays so unless
+			// the user is there to be offered the default.
 			def := m.Model
-			if def == "" {
+			if def == "" && (!exists || p.ask) {
 				def = defaultModels[role]
 			}
 			label := fmt.Sprintf("%s model, %s (\"-\" for none)", strings.ToUpper(role[:1])+role[1:], config.RoleNotes[role])
@@ -149,8 +161,11 @@ func (a *app) setup(ctx context.Context, args []string) error {
 				return err
 			}
 		}
-		if choice == "-" {
+		switch choice {
+		case "-":
 			delete(cfg.Models, role)
+			continue
+		case "":
 			continue
 		}
 		m.Model = choice
@@ -165,7 +180,18 @@ func (a *app) setup(ctx context.Context, args []string) error {
 	if err := config.WriteUser(path, cfg, time.Now()); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stderr, "ax: wrote %s\n", path)
+	changes := before.diff(snapshotUser(cfg))
+	switch {
+	case !exists:
+		fmt.Fprintf(a.stderr, "ax: wrote %s\n", path)
+	case len(changes) == 0:
+		fmt.Fprintf(a.stderr, "ax: rewrote %s with no changes\n", path)
+	default:
+		fmt.Fprintf(a.stderr, "ax: updated %s\n", path)
+		for _, c := range changes {
+			fmt.Fprintf(a.stderr, "ax:   %s\n", c)
+		}
+	}
 	if !cfg.Models[config.RoleEmbedding].Configured() || !cfg.Models[config.RoleDecision].Configured() {
 		a.warnf("embedding and decision models are not both configured; ax since will not resolve contradictions")
 	}
@@ -176,6 +202,52 @@ func (a *app) setup(ctx context.Context, args []string) error {
 		return nil
 	}
 	return a.check(ctx, cfg)
+}
+
+// userSnapshot is the part of ax.cnf that setup edits, flattened for
+// reporting what a run changed.
+type userSnapshot struct {
+	fields []string
+	values map[string]string
+}
+
+func snapshotUser(u config.User) userSnapshot {
+	s := userSnapshot{values: map[string]string{}}
+	add := func(name, value string) {
+		s.fields = append(s.fields, name)
+		s.values[name] = value
+	}
+	prov := u.Providers[defaultProvider]
+	add("provider base_url", prov.BaseURL)
+	switch {
+	case prov.APIKey != "":
+		add("api key", "stored in the file")
+	case prov.APIKeyEnv != "":
+		add("api key", "read from $"+prov.APIKeyEnv)
+	default:
+		add("api key", "none")
+	}
+	for _, role := range config.Roles {
+		m := u.Models[role]
+		v := "none"
+		if m.Configured() {
+			v = m.Model
+		}
+		add(role+" model", v)
+	}
+	add("update image", u.Update.Image)
+	return s
+}
+
+// diff lists the fields whose value differs in after, as "name: old -> new".
+func (s userSnapshot) diff(after userSnapshot) []string {
+	var out []string
+	for _, f := range s.fields {
+		if s.values[f] != after.values[f] {
+			out = append(out, fmt.Sprintf("%s: %s -> %s", f, s.values[f], after.values[f]))
+		}
+	}
+	return out
 }
 
 // check probes every configured model with a tiny request and looks for
