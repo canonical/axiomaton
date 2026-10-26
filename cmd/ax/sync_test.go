@@ -105,7 +105,7 @@ func TestSyncCommand(t *testing.T) {
 	defer srv.Close()
 	cfgPath := filepath.Join(root, "cfg", "axiomaton", "ax.cnf")
 	os.MkdirAll(filepath.Dir(cfgPath), 0o755)
-	os.WriteFile(cfgPath, []byte("providers.openrouter.base_url: \""+srv.URL+"/api\"\n"), 0o644)
+	os.WriteFile(cfgPath, []byte("providers.openrouter.base-url: \""+srv.URL+"/api\"\n"), 0o644)
 	repo := filepath.Join(root, "repo")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module m\n\ngo 1.26.0\n"), 0o644)

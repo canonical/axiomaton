@@ -31,12 +31,12 @@ func TestLoadUser(t *testing.T) {
 	os.WriteFile(path, []byte(`
 providers:
     openrouter:
-        api_key: "sk-test"
+        api-key: "sk-test"
 models:
     embedding: {model: "openai/text-embedding-3-small"}
     decision: {model: "typesafe/jev-1.13"}
-    summary: {provider: "local", model: "llama", base_url: "http://localhost:1234/v1", api_key: "x"}
-summary_budget: 800
+    summary: {provider: "local", model: "llama", base-url: "http://localhost:1234/v1", api-key: "x"}
+summary-budget: 800
 search.candidates: 3
 `), 0o644)
 	cfg, err := LoadUser(path)

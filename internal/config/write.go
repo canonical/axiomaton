@@ -56,13 +56,13 @@ func Render(u User, now time.Time) ([]byte, error) {
 		p := u.Providers[n]
 		m := InlineMap()
 		if p.BaseURL != "" {
-			m.Items = append(m.Items, Pair("base_url", Str(p.BaseURL), ""))
+			m.Items = append(m.Items, Pair("base-url", Str(p.BaseURL), ""))
 		}
 		if p.APIKey != "" {
-			m.Items = append(m.Items, Pair("api_key", Str(p.APIKey), ""))
+			m.Items = append(m.Items, Pair("api-key", Str(p.APIKey), ""))
 		}
 		if p.APIKeyEnv != "" {
-			m.Items = append(m.Items, Pair("api_key_env", Str(p.APIKeyEnv), ""))
+			m.Items = append(m.Items, Pair("api-key-env", Str(p.APIKeyEnv), ""))
 		}
 		providers.Items = append(providers.Items, Pair(n, m, ""))
 	}
@@ -85,13 +85,13 @@ func Render(u User, now time.Time) ([]byte, error) {
 			fields.Items = append(fields.Items, Pair("provider", Str(m.Provider), ""))
 		}
 		if m.BaseURL != "" {
-			fields.Items = append(fields.Items, Pair("base_url", Str(m.BaseURL), ""))
+			fields.Items = append(fields.Items, Pair("base-url", Str(m.BaseURL), ""))
 		}
 		if m.APIKey != "" {
-			fields.Items = append(fields.Items, Pair("api_key", Str(m.APIKey), ""))
+			fields.Items = append(fields.Items, Pair("api-key", Str(m.APIKey), ""))
 		}
 		if m.APIKeyEnv != "" {
-			fields.Items = append(fields.Items, Pair("api_key_env", Str(m.APIKeyEnv), ""))
+			fields.Items = append(fields.Items, Pair("api-key-env", Str(m.APIKeyEnv), ""))
 		}
 		item := Pair(role, fields, RoleNotes[role])
 		item.PreCmt = Lines(notes...)
@@ -105,27 +105,27 @@ func Render(u User, now time.Time) ([]byte, error) {
 	}
 	add(modelsItem)
 
-	budget := Pair("summary_budget", Int(u.SummaryBudget), "tokens for ax since -s")
+	budget := Pair("summary-budget", Int(u.SummaryBudget), "tokens for ax since -s")
 	budget.PreCmt = Lines(notes...)
 	add(budget)
 	add(Pair("search", BlockMap(
 		Pair("candidates", Int(u.Search.Candidates), "nearest neighbours per axiom"),
-		Pair("min_similarity", Float(u.Search.MinSimilarity), "cosine floor"),
-		Pair("rerank_top_n", Int(u.Search.RerankTopN), ""),
-		Pair("min_relevance", Float(u.Search.MinRelevance), ""),
-		Pair("decision_threshold", Float(u.Search.DecisionThreshold), "minimum probability to accept a verdict"),
+		Pair("min-similarity", Float(u.Search.MinSimilarity), "cosine floor"),
+		Pair("rerank-top-n", Int(u.Search.RerankTopN), ""),
+		Pair("min-relevance", Float(u.Search.MinRelevance), ""),
+		Pair("decision-threshold", Float(u.Search.DecisionThreshold), "minimum probability to accept a verdict"),
 	), ""))
 	add(Pair("retry", BlockMap(
-		Pair("max_attempts", Int(u.Retry.MaxAttempts), "tries per model request"),
-		Pair("initial_backoff", Float(u.Retry.InitialBackoff), "seconds; doubles each attempt with jitter"),
-		Pair("max_backoff", Float(u.Retry.MaxBackoff), "seconds"),
+		Pair("max-attempts", Int(u.Retry.MaxAttempts), "tries per model request"),
+		Pair("initial-backoff", Float(u.Retry.InitialBackoff), "seconds; doubles each attempt with jitter"),
+		Pair("max-backoff", Float(u.Retry.MaxBackoff), "seconds"),
 	), ""))
 	add(Pair("update", BlockMap(
 		Pair("backend", Str(u.Update.Backend), "auto (podman if installed, else lxd), podman, lxd or lxd-vm"),
 		Pair("image", Str(u.Update.Image), "podman image"),
-		Pair("lxd_image", Str(u.Update.LXDImage), "LXD image for containers and virtual machines"),
-		Pair("max_iterations", Int(u.Update.MaxIterations), "tool calls per agent run"),
-		Pair("exec_timeout", Int(u.Update.ExecTimeout), "seconds per command in the container"),
+		Pair("lxd-image", Str(u.Update.LXDImage), "LXD image for containers and virtual machines"),
+		Pair("max-iterations", Int(u.Update.MaxIterations), "tool calls per agent run"),
+		Pair("exec-timeout", Int(u.Update.ExecTimeout), "seconds per command in the container"),
 		Pair("confirmations", Int(u.Update.Confirmations), "confirmation agents run at once (default: half the CPUs)"),
 	), ""))
 	disabled := Pair("disabled", Bool(u.Proxy.Disabled), "")
@@ -138,7 +138,7 @@ func Render(u User, now time.Time) ([]byte, error) {
 	)
 	add(Pair("proxy", BlockMap(
 		disabled,
-		Pair("max_object_mb", Int(u.Proxy.MaxObjectMB), ""),
+		Pair("max-object-mb", Int(u.Proxy.MaxObjectMB), ""),
 	), ""))
 	file := Pair("file", Str(u.Sync.File), "context file relative to the project, e.g. CLAUDE.local.md")
 	file.PreCmt = Lines(

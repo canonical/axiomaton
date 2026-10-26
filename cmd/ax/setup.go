@@ -218,7 +218,7 @@ func snapshotUser(u config.User) userSnapshot {
 		s.values[name] = value
 	}
 	prov := u.Providers[defaultProvider]
-	add("provider base_url", prov.BaseURL)
+	add("provider base-url", prov.BaseURL)
 	switch {
 	case prov.APIKey != "":
 		add("api key", "stored in the file")

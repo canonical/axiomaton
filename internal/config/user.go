@@ -38,18 +38,18 @@ const (
 
 // Provider holds connection defaults shared by models using that provider.
 type Provider struct {
-	BaseURL   string `json:"base_url"`
-	APIKey    string `json:"api_key"`
-	APIKeyEnv string `json:"api_key_env"`
+	BaseURL   string `json:"base-url"`
+	APIKey    string `json:"api-key"`
+	APIKeyEnv string `json:"api-key-env"`
 }
 
 // Model configures one model role.
 type Model struct {
 	Provider  string `json:"provider"`
 	Model     string `json:"model"`
-	BaseURL   string `json:"base_url"`
-	APIKey    string `json:"api_key"`
-	APIKeyEnv string `json:"api_key_env"`
+	BaseURL   string `json:"base-url"`
+	APIKey    string `json:"api-key"`
+	APIKeyEnv string `json:"api-key-env"`
 }
 
 // Configured reports whether the role has a model set.
@@ -60,14 +60,14 @@ type Search struct {
 	// Candidates is how many nearest neighbours to consider per axiom.
 	Candidates int `json:"candidates"`
 	// MinSimilarity drops neighbours below this cosine similarity.
-	MinSimilarity float64 `json:"min_similarity"`
+	MinSimilarity float64 `json:"min-similarity"`
 	// RerankTopN keeps this many candidates after reranking.
-	RerankTopN int `json:"rerank_top_n"`
+	RerankTopN int `json:"rerank-top-n"`
 	// MinRelevance drops reranked candidates below this relevance score.
-	MinRelevance float64 `json:"min_relevance"`
+	MinRelevance float64 `json:"min-relevance"`
 	// DecisionThreshold is the minimum probability for a contradiction or
 	// restatement verdict to be accepted; below it the pair is unrelated.
-	DecisionThreshold float64 `json:"decision_threshold"`
+	DecisionThreshold float64 `json:"decision-threshold"`
 }
 
 // Update tunes the containerised update agents.
@@ -79,10 +79,10 @@ type Update struct {
 	Image string `json:"image"`
 	// LXDImage is the LXD image for containers and virtual machines, e.g.
 	// ubuntu:26.04.
-	LXDImage      string `json:"lxd_image"`
-	MaxIterations int    `json:"max_iterations"`
+	LXDImage      string `json:"lxd-image"`
+	MaxIterations int    `json:"max-iterations"`
 	// ExecTimeout bounds each tool command inside the container, in seconds.
-	ExecTimeout int `json:"exec_timeout"`
+	ExecTimeout int `json:"exec-timeout"`
 	// Confirmations is how many confirmation agents (each in its own
 	// container) run at once.
 	Confirmations int `json:"confirmations"`
@@ -95,7 +95,7 @@ type Proxy struct {
 	// network, with nothing cached and no restriction on what leaves.
 	Disabled bool `json:"disabled"`
 	// MaxObjectMB is the largest download kept in the cache.
-	MaxObjectMB int `json:"max_object_mb"`
+	MaxObjectMB int `json:"max-object-mb"`
 }
 
 // Retry tunes how model requests are retried after rate limits and
@@ -103,11 +103,11 @@ type Proxy struct {
 // MaxBackoff, and a Retry-After header from the server is honoured.
 type Retry struct {
 	// MaxAttempts is the total number of tries per request.
-	MaxAttempts int `json:"max_attempts"`
+	MaxAttempts int `json:"max-attempts"`
 	// InitialBackoff is the first delay ceiling, in seconds.
-	InitialBackoff float64 `json:"initial_backoff"`
+	InitialBackoff float64 `json:"initial-backoff"`
 	// MaxBackoff caps the delay between attempts, in seconds.
-	MaxBackoff float64 `json:"max_backoff"`
+	MaxBackoff float64 `json:"max-backoff"`
 }
 
 // Initial and Max return the backoff bounds as durations.
@@ -154,7 +154,7 @@ func (s SyncProject) Cutoff() (value string, isDate, ok bool) {
 type User struct {
 	Providers     map[string]Provider `json:"providers"`
 	Models        map[string]Model    `json:"models"`
-	SummaryBudget int                 `json:"summary_budget"`
+	SummaryBudget int                 `json:"summary-budget"`
 	Search        Search              `json:"search"`
 	Retry         Retry               `json:"retry"`
 	Update        Update              `json:"update"`
@@ -350,7 +350,7 @@ func (u User) Resolve(role string) (Endpoint, error) {
 	ep := Endpoint{Role: role, Provider: provName, Model: m.Model}
 	ep.BaseURL = firstNonEmpty(m.BaseURL, prov.BaseURL)
 	if ep.BaseURL == "" {
-		return ep, fmt.Errorf("model %s: provider %q has no base_url", role, provName)
+		return ep, fmt.Errorf("model %s: provider %q has no base-url", role, provName)
 	}
 	ep.BaseURL = strings.TrimRight(ep.BaseURL, "/")
 	ep.APIKey = firstNonEmpty(m.APIKey, prov.APIKey)
@@ -360,7 +360,7 @@ func (u User) Resolve(role string) (Endpoint, error) {
 			ep.APIKey = os.Getenv(env)
 		}
 		if ep.APIKey == "" {
-			return ep, fmt.Errorf("model %s: no API key (set api_key or export %s)", role, firstNonEmpty(env, "an api_key_env"))
+			return ep, fmt.Errorf("model %s: no API key (set api-key or export %s)", role, firstNonEmpty(env, "an api-key-env"))
 		}
 	}
 	return ep, nil
@@ -375,7 +375,7 @@ func (u User) ProviderEndpoint(name string) (Endpoint, error) {
 		return Endpoint{}, fmt.Errorf("provider %q is not configured", name)
 	}
 	if prov.BaseURL == "" {
-		return Endpoint{}, fmt.Errorf("provider %q has no base_url", name)
+		return Endpoint{}, fmt.Errorf("provider %q has no base-url", name)
 	}
 	ep := Endpoint{Provider: name, BaseURL: strings.TrimRight(prov.BaseURL, "/"), APIKey: prov.APIKey}
 	if ep.APIKey == "" && prov.APIKeyEnv != "" {

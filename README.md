@@ -125,7 +125,7 @@ or to the user wide log outside any project.
 `ax.cnf` names the models for each role. A minimal file:
 
 ```
-providers.openrouter.api_key_env: "OPENROUTER_API_KEY"
+providers.openrouter.api-key-env: "OPENROUTER_API_KEY"
 models:
     embedding: {model: "perplexity/pplx-embed-v1-4b"}
     decision: {model: "typesafe/jev-1.13"}
