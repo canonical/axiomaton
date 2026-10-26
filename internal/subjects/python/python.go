@@ -109,7 +109,7 @@ func pinnedVersion(path string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = strings.TrimSpace(line[:i])
@@ -127,7 +127,7 @@ var clause = regexp.MustCompile(`^(>=|~=|==|\^|~|>)?\s*v?([0-9]+\.[0-9]+(?:\.[0-
 // specifier such as ">=3.11", ">=3.9, <4", "~=3.10.2", "==3.12.*" or a
 // Poetry constraint such as "^3.11". A bare upper bound yields "".
 func lowerBound(spec string) string {
-	for _, part := range strings.Split(spec, ",") {
+	for part := range strings.SplitSeq(spec, ",") {
 		part = strings.TrimSpace(part)
 		if m := clause.FindStringSubmatch(part); m != nil {
 			return m[2]

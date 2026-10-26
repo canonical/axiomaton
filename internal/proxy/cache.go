@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -231,9 +232,7 @@ func (w *Writer) Abort() {
 // Touch records that the origin confirmed the entry is still current,
 // adopting any refreshed headers it sent.
 func (c *Cache) Touch(e *Entry, refreshed http.Header) error {
-	for k, v := range storedHeaders(refreshed) {
-		e.Header[k] = v
-	}
+	maps.Copy(e.Header, storedHeaders(refreshed))
 	e.Stored = c.now()
 	data, err := json.Marshal(e)
 	if err != nil {
@@ -268,7 +267,7 @@ func TTL(url string, header http.Header) time.Duration {
 		ttl = immutableTTL
 	}
 	if cc := header.Get("Cache-Control"); cc != "" {
-		for _, d := range strings.Split(cc, ",") {
+		for d := range strings.SplitSeq(cc, ",") {
 			d = strings.TrimSpace(strings.ToLower(d))
 			if v, ok := strings.CutPrefix(d, "max-age="); ok {
 				if secs, err := strconv.Atoi(v); err == nil && time.Duration(secs)*time.Second > ttl {

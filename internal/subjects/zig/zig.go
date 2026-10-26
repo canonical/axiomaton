@@ -91,7 +91,7 @@ var minimumField = regexp.MustCompile(`\.minimum_zig_version\s*=\s*"([^"]*)"`)
 // // comments.
 func minimumVersion(zon string) string {
 	var lines []string
-	for _, line := range strings.Split(zon, "\n") {
+	for line := range strings.SplitSeq(zon, "\n") {
 		if i := strings.Index(line, "//"); i >= 0 {
 			line = line[:i]
 		}

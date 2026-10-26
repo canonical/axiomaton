@@ -213,7 +213,7 @@ func TestBypassAndLimits(t *testing.T) {
 	}
 	// Over the size limit: served but not stored (the origin announces the
 	// length, so the proxy knows up front and bypasses the cache).
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		resp, body = get(t, client, up.URL+"/big.tar.gz")
 		if resp.Header.Get(CacheHeader) != "BYPASS" || len(body) != 2048 {
 			t.Fatalf("big %d: %s %d", i, resp.Header.Get(CacheHeader), len(body))
@@ -343,7 +343,7 @@ func TestSharedCache(t *testing.T) {
 	dir := t.TempDir()
 	ca, _ := LoadOrCreateCA(filepath.Join(dir, "ca"))
 	var clients []*http.Client
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		s := &Server{CA: ca, Cache: &Cache{Dir: filepath.Join(dir, "cache")}, Token: "t", Log: t.Logf}
 		addr, err := s.Start("127.0.0.1:0")
 		if err != nil {
@@ -377,7 +377,7 @@ func TestSharedCache(t *testing.T) {
 func TestCAConcurrentCreate(t *testing.T) {
 	dir := t.TempDir()
 	cas := make(chan *CA, 4)
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		go func() {
 			ca, err := LoadOrCreateCA(dir)
 			if err != nil {
@@ -387,7 +387,7 @@ func TestCAConcurrentCreate(t *testing.T) {
 		}()
 	}
 	first := <-cas
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if ca := <-cas; ca == nil || first == nil || !ca.Certificate().Equal(first.Certificate()) {
 			t.Fatal("concurrent creation should yield one CA")
 		}
@@ -471,7 +471,7 @@ func TestUnixSocket(t *testing.T) {
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 	var resp *http.Response
 	var err error
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if resp, err = client.Get(up.URL + "/pool/main/x/x_1.0.deb"); err == nil {
 			break
 		}
@@ -561,7 +561,7 @@ func TestGitMirror(t *testing.T) {
 			errs <- err
 		}(i, pu)
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := <-errs; err != nil {
 			t.Fatalf("concurrent clone: %v", err)
 		}

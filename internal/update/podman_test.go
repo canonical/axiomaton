@@ -149,7 +149,7 @@ func TestPodmanProxyIntegration(t *testing.T) {
 		}
 		prev(f, a...)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		res, err = c.Exec(ctx, fmt.Sprintf("rm -rf s%d && git clone -q https://github.com/golang/sync s%d && ls s%d/errgroup", i, i, i), 3*time.Minute)
 		if err != nil || res.ExitCode != 0 {
 			t.Fatalf("git clone %d through proxy: %+v %v", i, res, err)

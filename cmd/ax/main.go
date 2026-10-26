@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -706,8 +707,8 @@ func (a *app) shutdown() {
 	if a.proxy != nil {
 		a.proxy.Close()
 	}
-	for i := len(a.cleanup) - 1; i >= 0; i-- {
-		a.cleanup[i]()
+	for _, v := range slices.Backward(a.cleanup) {
+		v()
 	}
 	a.cleanup = nil
 }

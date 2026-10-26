@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,12 +224,7 @@ func (s *Server) connectAllowed(port string) bool {
 	if ports == nil {
 		ports = DefaultConnectPorts
 	}
-	for _, p := range ports {
-		if p == port {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ports, port)
 }
 
 func (s *Server) authorised(r *http.Request) bool {
@@ -532,10 +528,8 @@ func HostsEntry(hosts, name string) string {
 		if len(f) < 2 || net.ParseIP(f[0]) == nil {
 			continue
 		}
-		for _, n := range f[1:] {
-			if n == name {
-				return f[0]
-			}
+		if slices.Contains(f[1:], name) {
+			return f[0]
 		}
 	}
 	return ""
