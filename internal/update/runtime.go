@@ -79,6 +79,8 @@ type Podman struct {
 	Self string
 	// Log receives lifecycle messages; nil discards them.
 	Log func(format string, args ...any)
+	// Consent is asked before the first container is started; nil grants.
+	Consent ConsentFunc
 }
 
 // CAPath is where the proxy CA certificate is placed in containers. A
@@ -125,6 +127,9 @@ func (p Podman) logf(format string, args ...any) {
 func (p Podman) Start(ctx context.Context) (Container, error) {
 	if p.Image == "" {
 		return nil, errors.New("podman: no image configured")
+	}
+	if err := askConsent(ctx, p.Consent, podmanConsent(p.Image, p.Proxy != nil)); err != nil {
+		return nil, err
 	}
 	var suffix [6]byte
 	rand.Read(suffix[:])

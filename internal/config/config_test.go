@@ -67,6 +67,14 @@ search.candidates: 3
 	if _, err := LoadUser(path); err == nil {
 		t.Fatal("unknown role should fail")
 	}
+	os.WriteFile(path, []byte("consent.docker: true\n"), 0o644)
+	if _, err := LoadUser(path); err == nil || !strings.Contains(err.Error(), "unknown consent key") {
+		t.Fatalf("unknown consent key should fail: %v", err)
+	}
+	os.WriteFile(path, []byte("consent: {podman: true, lxd: false}\n"), 0o644)
+	if cfg, err := LoadUser(path); err != nil || !cfg.Consent[ConsentPodman] || cfg.Consent[ConsentLXD] {
+		t.Fatalf("consent: %+v %v", cfg.Consent, err)
+	}
 }
 
 func TestResolveEnv(t *testing.T) {
@@ -196,6 +204,7 @@ func TestRenderRoundTrip(t *testing.T) {
 	u.Update.Image = "docker.io/library/ubuntu:24.04"
 	u.Sync.File = "CLAUDE.local.md"
 	u.Sync.Model = "openai/gpt-6-luna-pro"
+	u.Consent[ConsentLXDNetwork] = true
 	u.Sync.Projects = map[string]SyncProject{
 		"/home/me/proj: odd": {File: "AGENTS.override.md", Since: "2025-06-01"},
 		"/home/me/other":     {Model: "gpt-5-mini"},
@@ -235,6 +244,12 @@ func TestRenderRoundTrip(t *testing.T) {
 	if back.Sync.File != "CLAUDE.local.md" || back.Sync.Model != "openai/gpt-6-luna-pro" || back.Sync.Since != "" || len(back.Sync.Projects) != 2 ||
 		back.Sync.Projects["/home/me/proj: odd"] != (SyncProject{File: "AGENTS.override.md", Since: "2025-06-01"}) || back.Sync.Projects["/home/me/other"] != (SyncProject{Model: "gpt-5-mini"}) {
 		t.Fatalf("sync: %+v", back.Sync)
+	}
+	if !strings.Contains(string(data), "consent:\n") || !strings.Contains(string(data), "lxd-network: true") || !strings.Contains(string(data), "podman: false") {
+		t.Fatalf("consent render:\n%s", data)
+	}
+	if !back.Consent[ConsentLXDNetwork] || back.Consent[ConsentPodman] || back.Consent[ConsentLXD] {
+		t.Fatalf("consent: %+v", back.Consent)
 	}
 	if v, isDate, ok := back.Sync.Projects["/home/me/proj: odd"].Cutoff(); v != "2025-06-01" || !isDate || !ok {
 		t.Fatal("Cutoff date")

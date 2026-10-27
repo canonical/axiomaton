@@ -216,6 +216,130 @@ func TestLXDRuntime(t *testing.T) {
 	}
 }
 
+func TestLXDConsent(t *testing.T) {
+	bin, _, logPath := fakeLXC(t)
+	ctx := context.Background()
+	ca, _ := proxy.LoadOrCreateCA(filepath.Join(t.TempDir(), "ca"))
+	srv := &proxy.Server{CA: ca, Cache: &proxy.Cache{Dir: t.TempDir()}, Token: "tok"}
+	defer srv.Close()
+
+	// Denied: nothing is launched and no network is touched.
+	lxdNetAddr = map[string]string{}
+	var asked []ConsentRequest
+	deny := func(_ context.Context, req ConsentRequest) error {
+		asked = append(asked, req)
+		return errors.New("no")
+	}
+	rt := LXD{Image: "ubuntu:24.04", VM: true, Binary: bin, Proxy: srv, Consent: deny}
+	if _, err := rt.Start(ctx); err == nil || !strings.Contains(err.Error(), "run agents in LXD virtual machines: no") {
+		t.Fatalf("denied start: %v", err)
+	}
+	if log, _ := os.ReadFile(logPath); len(log) != 0 {
+		t.Fatalf("lxc ran without consent:\n%s", log)
+	}
+	if len(asked) != 1 || asked[0].Key != "lxd" || !strings.Contains(strings.Join(asked[0].Details, "\n"), "4GiB of memory") {
+		t.Fatalf("asked: %+v", asked)
+	}
+
+	// Granted for instances, denied for the network: the network is not
+	// created and the instance is not launched.
+	asked = nil
+	rt.Consent = func(ctx context.Context, req ConsentRequest) error {
+		asked = append(asked, req)
+		if req.Key == "lxd-network" {
+			return errors.New("not the network")
+		}
+		return nil
+	}
+	if _, err := rt.Start(ctx); err == nil || !strings.Contains(err.Error(), "create the isolated LXD network axiomaton: not the network") {
+		t.Fatalf("denied network: %v", err)
+	}
+	log, _ := os.ReadFile(logPath)
+	if strings.Contains(string(log), "network create") || strings.Contains(string(log), "launch") || !strings.Contains(string(log), "network show axiomaton") {
+		t.Fatalf("lxc calls after network denial:\n%s", log)
+	}
+	if len(asked) != 2 || asked[0].Key != "lxd" || asked[1].Key != "lxd-network" || !strings.Contains(strings.Join(asked[1].Details, "\n"), "ports 31280-31299") {
+		t.Fatalf("asked: %+v", asked)
+	}
+
+	// Both granted: each key is asked before the command it covers; an
+	// existing network is not asked about at all.
+	os.WriteFile(logPath, nil, 0o644)
+	asked = nil
+	rt.Consent = func(_ context.Context, req ConsentRequest) error {
+		log, _ := os.ReadFile(logPath)
+		if (req.Key == "lxd" && len(log) != 0) || strings.Contains(string(log), "network create") || strings.Contains(string(log), "launch") {
+			t.Errorf("%s asked too late:\n%s", req.Key, log)
+		}
+		asked = append(asked, req)
+		return nil
+	}
+	rt.VM = false
+	c, err := rt.Start(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close(ctx)
+	if len(asked) != 2 || asked[0].Key != "lxd" || asked[1].Key != "lxd-network" {
+		t.Fatalf("asked: %+v", asked)
+	}
+	lxdNetAddr = map[string]string{}
+	t.Setenv("FAKE_LXC_NETWORK_EXISTS", "1")
+	os.WriteFile(logPath, nil, 0o644)
+	asked = nil
+	if c, err := rt.Start(ctx); err != nil {
+		t.Fatal(err)
+	} else {
+		c.Close(ctx)
+	}
+	if len(asked) != 1 || asked[0].Key != "lxd" {
+		t.Fatalf("existing network should not be asked about: %+v", asked)
+	}
+
+	// Without a proxy the request says so and no network is involved.
+	os.WriteFile(logPath, nil, 0o644)
+	asked = nil
+	plain := LXD{Image: "ubuntu:24.04", Binary: bin, Consent: rt.Consent}
+	if c, err := plain.Start(ctx); err != nil {
+		t.Fatal(err)
+	} else {
+		c.Close(ctx)
+	}
+	if len(asked) != 1 || !strings.Contains(strings.Join(asked[0].Details, "\n"), "unrestricted") {
+		t.Fatalf("plain: %+v", asked)
+	}
+}
+
+func TestPodmanConsent(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "podman")
+	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$*\" >> \"$FAKE_PODMAN_LOG\"; exit 1\n"), 0o755)
+	logPath := filepath.Join(dir, "podman.log")
+	t.Setenv("FAKE_PODMAN_LOG", logPath)
+	var asked []ConsentRequest
+	rt := Podman{Image: "img:1", Binary: bin, Consent: func(_ context.Context, req ConsentRequest) error {
+		asked = append(asked, req)
+		return errors.New("no")
+	}}
+	if _, err := rt.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "run agents in podman containers: no") {
+		t.Fatalf("denied: %v", err)
+	}
+	if _, err := os.Stat(logPath); err == nil {
+		t.Fatal("podman ran without consent")
+	}
+	if len(asked) != 1 || asked[0].Key != "podman" || !strings.Contains(strings.Join(asked[0].Details, "\n"), "pull the image img:1") || !strings.Contains(strings.Join(asked[0].Details, "\n"), "unrestricted") {
+		t.Fatalf("asked: %+v", asked)
+	}
+	// Granted: podman is run (and here fails, which is the fake's doing).
+	rt.Consent = func(context.Context, ConsentRequest) error { return nil }
+	if _, err := rt.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "podman run img:1") {
+		t.Fatalf("granted: %v", err)
+	}
+	if log, _ := os.ReadFile(logPath); !strings.Contains(string(log), "run -d --rm --name axiomaton-") {
+		t.Fatalf("podman log:\n%s", log)
+	}
+}
+
 // TestLXDIntegration launches a real LXD container (AX_LXD_TEST=1) or
 // virtual machine (AX_LXD_VM_TEST=1) on the isolated network and checks
 // that only the proxy is reachable from it.

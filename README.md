@@ -133,6 +133,10 @@ models:
     agent: {model: "openai/gpt-6-luna-pro"}
 ```
 
+The first time `ax` runs podman, launches an LXD instance or creates the
+isolated LXD network it explains what it is about to do and asks for
+permission; answering `always` records it under `consent` in `ax.cnf`.
+
 `axiomaton.cnf` lists a project's subjects. Built-in subjects need only a
 name; others declare a clock shape:
 

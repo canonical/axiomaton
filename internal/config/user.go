@@ -23,6 +23,7 @@ import (
 	"maps"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -35,6 +36,30 @@ const (
 	RoleSummary   = "summary"
 	RoleAgent     = "agent"
 )
+
+// Consent keys name the actions ax asks the user's permission for before
+// taking them for the first time in a process. A true value under consent
+// in ax.cnf is a standing answer of "always", so ax does not ask.
+const (
+	// ConsentPodman covers pulling the podman image and running agent
+	// containers, including nsenter into their network namespaces.
+	ConsentPodman = "podman"
+	// ConsentLXD covers launching and deleting LXD instances.
+	ConsentLXD = "lxd"
+	// ConsentLXDNetwork covers creating the isolated LXD bridge network
+	// and the network ACL that restricts its egress.
+	ConsentLXDNetwork = "lxd-network"
+)
+
+// ConsentKeys lists the consent keys in documentation order.
+var ConsentKeys = []string{ConsentPodman, ConsentLXD, ConsentLXDNetwork}
+
+// ConsentNotes says what each consent key permits.
+var ConsentNotes = map[string]string{
+	ConsentPodman:     "pull the image and run agent containers with podman",
+	ConsentLXD:        "launch (and delete) LXD instances for agents",
+	ConsentLXDNetwork: "create the isolated LXD network and its ACL",
+}
 
 // Provider holds connection defaults shared by models using that provider.
 type Provider struct {
@@ -160,6 +185,9 @@ type User struct {
 	Update        Update              `json:"update"`
 	Proxy         Proxy               `json:"proxy"`
 	Sync          Sync                `json:"sync"`
+	// Consent holds standing permissions, keyed by ConsentKeys; true
+	// means the user answered "always" and is not asked again.
+	Consent map[string]bool `json:"consent"`
 
 	// Path is where the config was read from, or empty if defaults are in use.
 	Path string `json:"-"`
@@ -202,6 +230,7 @@ func DefaultUser() User {
 		Proxy: Proxy{
 			MaxObjectMB: 1024,
 		},
+		Consent: map[string]bool{},
 	}
 }
 
@@ -303,6 +332,14 @@ func (u *User) merge(o User) {
 		}
 		maps.Copy(u.Sync.Projects, o.Sync.Projects)
 	}
+	if u.Consent == nil {
+		u.Consent = map[string]bool{}
+	}
+	for key, ok := range o.Consent {
+		if ok {
+			u.Consent[key] = true
+		}
+	}
 }
 
 func (u User) validate() error {
@@ -312,6 +349,11 @@ func (u User) validate() error {
 	for dir, p := range u.Sync.Projects {
 		if err := validateCutoff("sync.projects "+dir, p.Model, p.Since); err != nil {
 			return err
+		}
+	}
+	for key := range u.Consent {
+		if !slices.Contains(ConsentKeys, key) {
+			return fmt.Errorf("%s: unknown consent key %q (use %s)", u.Path, key, strings.Join(ConsentKeys, ", "))
 		}
 	}
 	for role := range u.Models {

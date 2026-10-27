@@ -175,6 +175,16 @@ func Render(u User, now time.Time) ([]byte, error) {
 		sync.Items = append(sync.Items, Pair("projects", projects, ""))
 	}
 	add(Pair("sync", sync, ""))
+	consent := BlockMap()
+	for _, key := range ConsentKeys {
+		consent.Items = append(consent.Items, Pair(key, Bool(u.Consent[key]), ConsentNotes[key]))
+	}
+	consentItem := Pair("consent", consent, "")
+	consentItem.PreCmt = Lines(
+		"ax asks before it first runs podman, launches LXD instances or creates",
+		"the isolated LXD network; answering \"always\" records true here.",
+	)
+	add(consentItem)
 	return Document(header, root)
 }
 

@@ -113,6 +113,8 @@ type app struct {
 	stdout io.Writer
 
 	proxy *proxy.Server
+	// consent answers the runtimes' permission requests, once per process.
+	consent *consenter
 	// cleanup runs at shutdown, last added first.
 	cleanup []func()
 }
@@ -735,18 +737,19 @@ func (a *app) agentParts(cfg config.User, ep config.Endpoint, image string, need
 			a.warnf("cache proxy unavailable; instances use ordinary networking: %v", err)
 		}
 	}
+	consent := a.consenter(cfg).ask
 	var rt update.Runtime
 	switch backend {
 	case update.BackendPodman:
 		if image == "" {
 			image = cfg.Update.Image
 		}
-		rt = update.Podman{Image: image, Log: a.logf, Proxy: prx}
+		rt = update.Podman{Image: image, Log: a.logf, Proxy: prx, Consent: consent}
 	default:
 		if image == "" {
 			image = cfg.Update.LXDImage
 		}
-		rt = update.LXD{Image: image, VM: backend == update.BackendLXDVM, Log: a.logf, Proxy: prx}
+		rt = update.LXD{Image: image, VM: backend == update.BackendLXDVM, Log: a.logf, Proxy: prx, Consent: consent}
 	}
 	a.logf("agents run with %s (%s)", backend, image)
 	return rt, update.FrameworkAgent{Endpoint: ep, MaxIterations: cfg.Update.MaxIterations, MaxRetries: cfg.Retry.MaxAttempts - 1, Logger: logger}, nil

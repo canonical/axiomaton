@@ -51,6 +51,10 @@ type LXD struct {
 	Network string
 	// Log receives lifecycle messages; nil discards them.
 	Log func(format string, args ...any)
+	// Consent is asked before the first instance is launched and, again
+	// under its own key, before the isolated network is created; nil
+	// grants both.
+	Consent ConsentFunc
 }
 
 const (
@@ -103,6 +107,9 @@ func (l LXD) run(ctx context.Context, args ...string) (string, error) {
 func (l LXD) Start(ctx context.Context) (Container, error) {
 	if l.Image == "" {
 		return nil, errors.New("lxd: no image configured")
+	}
+	if err := askConsent(ctx, l.Consent, lxdConsent(l.Image, l.network(), l.VM, l.Proxy != nil)); err != nil {
+		return nil, err
 	}
 	var suffix [6]byte
 	rand.Read(suffix[:])
@@ -162,7 +169,20 @@ func (l LXD) ensureNetwork(ctx context.Context) (string, error) {
 	if ip, ok := lxdNetAddr[netName]; ok {
 		return ip, nil
 	}
+	// Creating the network or its ACL is asked about once, before the
+	// first of them that is missing.
+	consented := false
+	consent := func() error {
+		if consented {
+			return nil
+		}
+		consented = true
+		return askConsent(ctx, l.Consent, lxdNetworkConsent(netName))
+	}
 	if _, err := l.run(ctx, "network", "show", netName); err != nil {
+		if err := consent(); err != nil {
+			return "", err
+		}
 		l.logf("creating isolated LXD network %s", netName)
 		if _, err := l.run(ctx, "network", "create", netName, "ipv4.address=auto", "ipv4.nat=false", "ipv4.routing=false", "ipv6.address=none"); err != nil {
 			// Another ax may have created it in the meantime.
@@ -181,6 +201,9 @@ func (l LXD) ensureNetwork(ctx context.Context) (string, error) {
 	}
 	hostIP := ip.String()
 	if _, err := l.run(ctx, "network", "acl", "show", netName); err != nil {
+		if err := consent(); err != nil {
+			return "", err
+		}
 		l.logf("creating LXD network ACL %s: egress only to the proxy on %s", netName, hostIP)
 		if _, err := l.run(ctx, "network", "acl", "create", netName); err != nil {
 			if _, again := l.run(ctx, "network", "acl", "show", netName); again == nil {

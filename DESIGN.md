@@ -286,7 +286,18 @@ sync:
     file: "CLAUDE.local.md"  # defaults for ax sync in projects it has not seen
     model: "openai/gpt-6-luna-pro"  # or since: "2025-06-01"
     projects: {}  # filled in by ax sync, one entry per project
+consent:
+    podman: false  # pull the image and run agent containers with podman
+    lxd: false  # launch (and delete) LXD instances for agents
+    lxd-network: false  # create the isolated LXD network and its ACL
 ```
+
+Before ax first runs podman, launches an LXD instance or creates the
+isolated LXD network in a process, it says exactly what it is about to do
+and asks for permission: yes grants it for that process, no stops the
+command, and always records `true` under `consent` in `ax.cnf` so the
+question is not asked again. Without a terminal and without a standing
+answer the command fails and says which key to set.
 
 Any model may set its own `provider`, `base-url`, `api-key` or
 `api-key-env`. Embeddings, rerank and chat use the OpenAI compatible `/v1`
