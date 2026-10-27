@@ -43,7 +43,7 @@ const defaultProvider = "openrouter"
 // defaultModels are offered when ax.cnf has nothing for a role.
 var defaultModels = map[string]string{
 	config.RoleEmbedding: "perplexity/pplx-embed-v1-4b",
-	config.RoleRerank:    "cohere/rerank-v3.5",
+	config.RoleRerank:    "",
 	config.RoleDecision:  "typesafe/jev-1.13",
 	config.RoleSummary:   "openai/gpt-oss-120b",
 	config.RoleAgent:     "openai/gpt-6-luna-pro",
