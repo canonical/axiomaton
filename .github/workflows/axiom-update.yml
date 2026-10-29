@@ -1,0 +1,192 @@
+# Extends the built-in axiom logs once a week. Subjects whose upstream has
+# released since the last review are each updated with ax update, and the
+# appended axioms are proposed in a single pull request, together with the
+# proposals the confirmation agents could not confirm, for review.
+#
+# Needs the OPENROUTER_API_KEY secret and "Allow GitHub Actions to create
+# and approve pull requests" in the repository's Actions settings. The
+# AX_AGENT_MODEL variable overrides the agent model from ax setup.
+name: Axiom update
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      subjects:
+        description: Subjects to update whether or not they are behind, separated by spaces (default all that are behind)
+        required: false
+        default: ""
+
+concurrency:
+  group: axiom-update
+
+permissions:
+  contents: read
+
+env:
+  BRANCH: axiom-updates
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.outdated.outputs.matrix }}
+      ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      # An open pull request from an earlier week is extended rather than
+      # replaced, so its state file and logs are the starting point.
+      - id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$(gh pr list -R "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            echo "ref=$BRANCH" >>"$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.event.repository.default_branch }}" >>"$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+      - id: outdated
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBJECTS: ${{ inputs.subjects }}
+        run: |
+          # shellcheck disable=SC2086 # SUBJECTS is a list of words
+          matrix=$(.github/scripts/axiom-outdated.sh $SUBJECTS)
+          echo "matrix=$matrix" >>"$GITHUB_OUTPUT"
+          echo "$matrix" | jq -r '.[] | "- `\(.subject)` \(.have) → \(.latest)"' >>"$GITHUB_STEP_SUMMARY"
+
+  update:
+    needs: detect
+    if: needs.detect.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    name: update ${{ matrix.subject }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.detect.outputs.ref }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build ax
+        run: go build -o "$RUNNER_TEMP/ax" ./cmd/ax
+      - uses: canonical/setup-lxd@v1
+      - name: Configure ax
+        env:
+          AX_AGENT_MODEL: ${{ vars.AX_AGENT_MODEL }}
+        run: |
+          cnf="$RUNNER_TEMP/ax.cnf"
+          "$RUNNER_TEMP/ax" -c "$cnf" setup -y -no-check ${AX_AGENT_MODEL:+-agent "$AX_AGENT_MODEL"} </dev/null
+          # Agents run in LXD only: system containers, or virtual machines
+          # for the subjects that require them. The runner is disposable, so
+          # the standing consents are given.
+          sed -i -E -e 's/^(    backend: )"auto"/\1"lxd"/' \
+            -e 's/^(    (lxd|lxd-network)): false/\1: true/' "$cnf"
+          grep -q '^    backend: "lxd"' "$cnf"
+      - name: ax update ${{ matrix.subject }}
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUBJECT: ${{ matrix.subject }}
+          LOG: ${{ matrix.log }}
+          JOBS: ${{ matrix.jobs }}
+        run: |
+          set -o pipefail
+          # stdin is not a terminal, so unconfirmed proposals go to $LOG.pending.
+          "$RUNNER_TEMP/ax" -c "$RUNNER_TEMP/ax.cnf" -v update -j "$JOBS" -l "$LOG" "$SUBJECT" </dev/null 2>&1 | tee "$RUNNER_TEMP/update.log"
+      - name: Gather results
+        env:
+          LOG: ${{ matrix.log }}
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          git diff -- "$LOG" >"$out/axiomlog.patch"
+          if [ -f "$LOG.pending" ]; then cp "$LOG.pending" "$out/pending.jsonl"; fi
+          counts=$(sed -nE 's/^ax: ([0-9]+) axiom\(s\) proposed, ([0-9]+) confirmed \(([0-9]+) after correction\).*, ([0-9]+) need review$/\1 \2 \3 \4/p' "$RUNNER_TEMP/update.log" | tail -n1)
+          read -r proposed confirmed corrected pending <<<"${counts:-0 0 0 0}"
+          summary=$(sed -n '/^ax: agent summary: /,/^ax: [0-9]* axiom(s) proposed/p' "$RUNNER_TEMP/update.log" | sed '$d; 1s/^ax: agent summary: //')
+          jq -n --arg summary "$summary" \
+            --argjson proposed "$proposed" --argjson confirmed "$confirmed" \
+            --argjson corrected "$corrected" --argjson pending "$pending" \
+            '{proposed: $proposed, confirmed: $confirmed, corrected: $corrected, pending: $pending, summary: $summary}' >"$out/result.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: result-${{ matrix.slug }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+
+  pr:
+    needs: [detect, update]
+    if: always() && needs.detect.result == 'success' && needs.detect.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.detect.outputs.ref }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: result-*
+          path: ${{ runner.temp }}/results
+      - name: Apply results
+        env:
+          MATRIX: ${{ needs.detect.outputs.matrix }}
+        run: .github/scripts/axiom-collect.sh "$MATRIX" "$RUNNER_TEMP/results" "$RUNNER_TEMP/section.md"
+      # A pull request opened with the workflow token does not start other
+      # workflows, so the tests that would gate it run here.
+      - name: Test
+        id: test
+        continue-on-error: true
+        run: go test ./...
+      - name: Open or update the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.repository.default_branch }}
+          TESTS: ${{ steps.test.outcome }}
+        run: |
+          if git diff --quiet; then
+            echo "Nothing changed." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          section="$RUNNER_TEMP/section.md"
+          if [ "$TESTS" != success ]; then
+            printf '\n> [!WARNING]\n> `go test ./...` failed on this update; see %s.\n' \
+              "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >>"$section"
+          fi
+          cat "$section" >>"$GITHUB_STEP_SUMMARY"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -A -- internal/subjects .github/axiom-reviewed.json
+          git commit -q -m "chore: update built-in axiom logs" -m "$(sed -n '/^| `/p' "$section")"
+          # A branch left from a merged or closed pull request was not the
+          # starting point, so it is replaced.
+          git push --force origin "$BRANCH"
+
+          intro="Weekly update of the built-in axiom logs by the [axiom update workflow]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/axiom-update.yml). Confirmed axioms are appended in this branch; the proposals under each subject were not confirmed and can be recorded with \`ax add\`."
+          number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            previous=$(gh pr view "$number" --json body --jq .body | sed '1,/^$/d')
+            { echo "$intro"; echo; cat "$section"; echo; echo "$previous"; } | head -c 65000 >"$RUNNER_TEMP/body.md"
+            gh pr edit "$number" --body-file "$RUNNER_TEMP/body.md"
+          else
+            { echo "$intro"; echo; cat "$section"; } >"$RUNNER_TEMP/body.md"
+            gh pr create --base "$BASE" --head "$BRANCH" --title "Update built-in axiom logs" --body-file "$RUNNER_TEMP/body.md"
+          fi
+          [ "$TESTS" = success ]

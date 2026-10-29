@@ -490,6 +490,22 @@ maintainers with `ax update <subject> -l <path>`:
 Adding a directory with an `axiomlog` under the gomod seeds ships another
 module.
 
+The `Axiom update` workflow (`.github/workflows/axiom-update.yml`) does
+this every Monday. `.github/scripts/axiom-outdated.sh` compares each
+subject's newest upstream release (go.dev, python.org, ziglang.org, GitHub
+releases, the module proxy) with the last one reviewed, recorded in
+`.github/axiom-reviewed.json` or else the newest clock in the log; an
+untagged module counts as behind only once its latest commit is in a new
+month. Each subject that is behind runs `ax update` in its own job on
+`ubuntu-latest`, always under LXD (system containers, or virtual machines
+for the subjects that need them), and `.github/scripts/axiom-collect.sh`
+gathers the appended axioms and the reviewed versions into one pull
+request on the `axiom-updates` branch, listing the unconfirmed proposals
+with the `ax add` command for each. A pull request still open from an
+earlier week is extended rather than replaced. The workflow needs the
+`OPENROUTER_API_KEY` secret, and the repository must allow GitHub Actions
+to create pull requests; `AX_AGENT_MODEL` overrides the agent model.
+
 ## Custom subjects
 
 Any subject declared in `axiomaton.cnf` can be updated by the same agents
