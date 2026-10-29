@@ -91,6 +91,24 @@ ax sync 2025-06-01                            # switch this project to a date
 `-file <path>` names any other file. The file is personal to a checkout, so
 `ax sync` warns when git would commit it.
 
+For [pi](https://github.com/badlogic/pi-mono) and
+[opencode](https://opencode.ai), `-agent pi` or `-agent opencode` installs
+an extension instead, after asking, that runs `ax sync -print` as the agent
+starts and adds the report to its system prompt. It uses the knowledge
+cutoff of the model the agent is running when OpenRouter publishes one,
+and the remembered model or date otherwise. The extension goes in the
+project (`.pi/extensions/axiomaton.ts`, `.opencode/plugins/axiomaton.ts`)
+unless `-global` puts it in the agent's user configuration for every
+project; without either flag `ax sync` asks, defaulting to the project.
+
+```sh
+ax sync -agent pi openai/gpt-6-luna-pro       # asks: project or global, then install?
+ax sync -agent opencode -global -y 2025-06-01
+```
+
+`ax setup` also asks which agent you use, and for pi or opencode offers to
+install the extension for every project.
+
 ### Any subject, anywhere
 
 Name a subject and, optionally, its clock to query it directly:

@@ -193,7 +193,7 @@ func TestSyncCommand(t *testing.T) {
 	repo, other = other, repo
 	_, errOut, err = exec("2024-05-31\ncodex\n", true, "sync")
 	repo, other = other, repo
-	if err != nil || !strings.Contains(errOut, "Report changes since") || !strings.Contains(errOut, "Agent context file to update") || strings.Contains(errOut, "gitignore?") || !strings.Contains(errOut, "AGENTS.override.md is inside the git repository") || !strings.Contains(errOut, "appended the axiom changes to AGENTS.override.md") {
+	if err != nil || !strings.Contains(errOut, "Report changes since") || !strings.Contains(errOut, "Agent to keep current") || strings.Contains(errOut, "gitignore?") || !strings.Contains(errOut, "AGENTS.override.md is inside the git repository") || !strings.Contains(errOut, "appended the axiom changes to AGENTS.override.md") {
 		t.Fatalf("interactive sync: %v\n%s", err, errOut)
 	}
 	if _, err := os.Stat(filepath.Join(other, "AGENTS.override.md")); err != nil {

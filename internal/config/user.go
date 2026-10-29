@@ -139,13 +139,21 @@ type Retry struct {
 func (r Retry) Initial() time.Duration { return time.Duration(r.InitialBackoff * float64(time.Second)) }
 func (r Retry) Max() time.Duration     { return time.Duration(r.MaxBackoff * float64(time.Second)) }
 
+// Harnesses are the agents ax sync serves with an installed extension,
+// which runs ax sync -print as the agent starts, instead of a context file.
+var Harnesses = []string{"pi", "opencode"}
+
 // Sync configures ax sync, which keeps an agent context file in a project
-// up to date with the output of ax since or ax for.
+// up to date with the output of ax since or ax for, or installs an
+// extension for a harness that fetches it.
 type Sync struct {
 	// File is the context file to write in a project that has no entry
 	// under Projects yet, relative to the project directory, for example
 	// CLAUDE.local.md.
 	File string `json:"file,omitempty"`
+	// Harness is the harness, one of Harnesses, to install an extension
+	// for in a project that has no entry yet, in place of File.
+	Harness string `json:"harness,omitempty"`
 	// Model is the OpenRouter model whose knowledge cutoff is used for
 	// projects that have no entry yet.
 	Model string `json:"model,omitempty"`
@@ -158,9 +166,13 @@ type Sync struct {
 
 // SyncProject is what ax sync remembered for one project.
 type SyncProject struct {
-	File  string `json:"file,omitempty"`
-	Model string `json:"model,omitempty"`
-	Since string `json:"since,omitempty"`
+	File    string `json:"file,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	// Global records that the harness extension was installed for the
+	// user rather than in the project.
+	Global bool   `json:"global,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Since  string `json:"since,omitempty"`
 }
 
 // Cutoff returns the model or the date the project reports from, with
@@ -320,6 +332,9 @@ func (u *User) merge(o User) {
 	if o.Sync.File != "" {
 		u.Sync.File = o.Sync.File
 	}
+	if o.Sync.Harness != "" {
+		u.Sync.Harness = o.Sync.Harness
+	}
 	if o.Sync.Model != "" {
 		u.Sync.Model = o.Sync.Model
 	}
@@ -346,8 +361,14 @@ func (u User) validate() error {
 	if err := validateCutoff("sync", u.Sync.Model, u.Sync.Since); err != nil {
 		return err
 	}
+	if err := validateTarget("sync", u.Sync.File, u.Sync.Harness); err != nil {
+		return err
+	}
 	for dir, p := range u.Sync.Projects {
 		if err := validateCutoff("sync.projects "+dir, p.Model, p.Since); err != nil {
+			return err
+		}
+		if err := validateTarget("sync.projects "+dir, p.File, p.Harness); err != nil {
 			return err
 		}
 	}
@@ -445,6 +466,18 @@ func validateCutoff(where, model, since string) error {
 		if _, err := time.Parse("2006-01-02", since); err != nil {
 			return fmt.Errorf("%s: since %q is not a date (use YYYY-MM-DD)", where, since)
 		}
+	}
+	return nil
+}
+
+// validateTarget checks that a sync entry names a file or a known harness,
+// not both.
+func validateTarget(where, file, harness string) error {
+	if file != "" && harness != "" {
+		return fmt.Errorf("%s: give file or harness, not both", where)
+	}
+	if harness != "" && !slices.Contains(Harnesses, harness) {
+		return fmt.Errorf("%s: unknown harness %q (use %s)", where, harness, strings.Join(Harnesses, " or "))
 	}
 	return nil
 }

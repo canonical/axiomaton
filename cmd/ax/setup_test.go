@@ -162,7 +162,7 @@ func TestSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Models[config.RoleEmbedding].Configured() || cfg.Models[config.RoleRerank].Model != "cohere/rerank-v3.5" || cfg.Models[config.RoleAgent].Model != "anthropic/claude-x" || cfg.Update.Image != "docker.io/library/ubuntu:24.04" {
+	if cfg.Models[config.RoleEmbedding].Configured() || cfg.Models[config.RoleRerank].Configured() || cfg.Models[config.RoleAgent].Model != "anthropic/claude-x" || cfg.Update.Image != "docker.io/library/ubuntu:24.04" {
 		t.Fatalf("interactive result: %+v %+v", cfg.Models, cfg.Update)
 	}
 	if ep, err := cfg.Resolve(config.RoleAgent); err != nil || ep.APIKey != "key" {

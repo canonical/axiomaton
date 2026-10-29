@@ -61,12 +61,15 @@ func (a *app) setup(ctx context.Context, args []string) error {
 	key := fs.String("key", "", "API key to store in ax.cnf (default: read from the environment at run time)")
 	keyEnv := fs.String("key-env", "", "environment variable holding the API key (default OPENROUTER_API_KEY)")
 	image := fs.String("image", "", "container image for ax update agents")
+	agent := fs.String("harness", "", `the agent harness ax sync keeps current by default: `+agentNames()+` ("-" for none)`)
+	syncCutoff := fs.String("sync-cutoff", "", `model id or date ax sync reports since in projects it has not seen ("-" for none)`)
+	globalExt := fs.Bool("global-extension", false, "with -harness "+strings.ReplaceAll(harnessNames(), " and ", " or ")+", install its extension for every project without asking")
 	roleFlags := map[string]*string{}
 	for _, role := range config.Roles {
 		roleFlags[role] = fs.String(role, "", role+` model ("-" for none)`)
 	}
 	fs.Usage = func() {
-		fmt.Fprintln(a.stderr, "usage: ax setup [-y] [-force] [-no-check] [-base-url url] [-key k | -key-env VAR] [-image ref] [-<role> model]...")
+		fmt.Fprintln(a.stderr, "usage: ax setup [-y] [-force] [-no-check] [-base-url url] [-key k | -key-env VAR] [-image ref] [-<role> model]... [-harness name [-global-extension]] [-sync-cutoff model|date]")
 		fs.PrintDefaults()
 		fmt.Fprintln(a.stderr, "With an existing ax.cnf, value flags change only the fields they name; without flags the prompts offer the current values.")
 	}
@@ -88,7 +91,7 @@ func (a *app) setup(ctx context.Context, args []string) error {
 	// Flags that name a value turn a run against an existing file into a
 	// targeted update: those fields change, nothing is asked, the rest is
 	// kept.
-	targeted := *baseURL != "" || *key != "" || *keyEnv != "" || *image != ""
+	targeted := *baseURL != "" || *key != "" || *keyEnv != "" || *image != "" || *agent != "" || *syncCutoff != "" || *globalExt
 	for _, f := range roleFlags {
 		targeted = targeted || *f != ""
 	}
@@ -177,6 +180,11 @@ func (a *app) setup(ctx context.Context, args []string) error {
 		return err
 	}
 
+	install, err := a.setupHarness(&cfg, *agent, *syncCutoff, *globalExt, p)
+	if err != nil {
+		return err
+	}
+
 	if err := config.WriteUser(path, cfg, time.Now()); err != nil {
 		return err
 	}
@@ -197,6 +205,16 @@ func (a *app) setup(ctx context.Context, args []string) error {
 	}
 	if prov.APIKey == "" && prov.APIKeyEnv != "" && os.Getenv(prov.APIKeyEnv) == "" {
 		a.warnf("$%s is not set in this environment; export it before running ax", prov.APIKeyEnv)
+	}
+	if install != nil {
+		gp, err := install.global()
+		if err != nil {
+			return err
+		}
+		// Asked above, or -global-extension: that is the confirmation.
+		if _, err := a.installHarness(ctx, *install, gp, true, true, p); err != nil {
+			return err
+		}
 	}
 	if *noCheck {
 		return nil
@@ -236,7 +254,111 @@ func snapshotUser(u config.User) userSnapshot {
 		add(role+" model", v)
 	}
 	add("update image", u.Update.Image)
+	target := u.Sync.Harness
+	if target == "" {
+		target = u.Sync.File
+	}
+	add("sync default", firstNonEmptyStr(target, "none"))
+	cut, _, _ := (config.SyncProject{Model: u.Sync.Model, Since: u.Sync.Since}).Cutoff()
+	add("sync cutoff", firstNonEmptyStr(cut, "none"))
 	return s
+}
+
+func firstNonEmptyStr(s, def string) string {
+	if s != "" {
+		return s
+	}
+	return def
+}
+
+// agentNames lists every agent ax sync knows, file and harness alike.
+func agentNames() string {
+	var names []string
+	for _, a := range agentFiles {
+		names = append(names, a.agent)
+	}
+	for _, h := range harnesses {
+		names = append(names, h.name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// setupHarness asks which agent ax sync serves by default and sets
+// sync.file or sync.harness to match. For a harness it offers to install
+// the extension for every project, which needs a default cutoff for
+// projects ax sync has not seen; it returns that harness when the
+// extension should be installed once ax.cnf is written.
+func (a *app) setupHarness(cfg *config.User, agent, cutoff string, global bool, p prompter) (*harness, error) {
+	current := cfg.Sync.Harness
+	if current == "" {
+		for _, f := range agentFiles {
+			if f.file == cfg.Sync.File {
+				current = f.agent
+			}
+		}
+	}
+	if agent == "" {
+		var err error
+		if agent, err = p.text(`Agent harness to keep current with ax sync (`+agentNames()+`, "-" for none)`, current); err != nil {
+			return nil, err
+		}
+		agent = strings.TrimSpace(agent)
+	}
+	var install *harness
+	switch h, isHarness := findHarness(agent); {
+	case agent == "":
+		// Unchanged.
+	case agent == "-":
+		cfg.Sync.File, cfg.Sync.Harness = "", ""
+	case isHarness:
+		cfg.Sync.File, cfg.Sync.Harness = "", h.name
+		// Installing code that runs in every session needs a yes from the
+		// user or the flag; -y alone is not one.
+		if !global && p.ask {
+			gp, err := h.global()
+			if err != nil {
+				return nil, err
+			}
+			if global, err = p.yesNo(fmt.Sprintf("Install the %s %s at %s, so every %s session gets the axiom changes for its project?", h.name, h.kind, shorten(gp), h.name), true); err != nil {
+				return nil, err
+			}
+		}
+		if global {
+			install = &h
+		}
+	default:
+		file := agentFile(agent)
+		if file == agent {
+			return nil, fmt.Errorf("setup: unknown agent harness %q; one of %s", agent, agentNames())
+		}
+		cfg.Sync.File, cfg.Sync.Harness = file, ""
+	}
+	if global && install == nil {
+		return nil, fmt.Errorf("setup: -global-extension needs -harness %s", strings.ReplaceAll(harnessNames(), " and ", " or "))
+	}
+
+	// A global extension reports since the active model's cutoff when
+	// OpenRouter publishes it; the default covers the rest.
+	if cutoff == "" && (install != nil || cfg.Sync.Harness != "" || cfg.Sync.File != "") {
+		def, _, _ := (config.SyncProject{Model: cfg.Sync.Model, Since: cfg.Sync.Since}).Cutoff()
+		var err error
+		if cutoff, err = p.text(`Default for ax sync in new projects: an OpenRouter model id or a date, YYYY-MM-DD ("-" for none)`, def); err != nil {
+			return nil, err
+		}
+		cutoff = strings.TrimSpace(cutoff)
+	}
+	switch {
+	case cutoff == "":
+	case cutoff == "-":
+		cfg.Sync.Model, cfg.Sync.Since = "", ""
+	default:
+		if t, err := parseDate(cutoff); err == nil {
+			cfg.Sync.Since, cfg.Sync.Model = t.Format("2006-01-02"), ""
+		} else {
+			cfg.Sync.Model, cfg.Sync.Since = cutoff, ""
+		}
+	}
+	return install, nil
 }
 
 // diff lists the fields whose value differs in after, as "name: old -> new".

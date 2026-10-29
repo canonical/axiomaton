@@ -64,24 +64,42 @@ func agentChoices() string {
 	for _, a := range agentFiles {
 		parts = append(parts, a.agent+" = "+a.file)
 	}
+	for _, h := range harnesses {
+		parts = append(parts, h.name+" = "+h.kind)
+	}
 	return strings.Join(parts, ", ")
 }
 
+func harnessNames() string {
+	var names []string
+	for _, h := range harnesses {
+		names = append(names, h.name)
+	}
+	return strings.Join(names, " and ")
+}
+
 // sync writes the since or for report for this project into an agent
-// context file, remembering the cutoff and the file in ax.cnf.
+// context file, or installs an extension that fetches it for a harness,
+// remembering the cutoff and the target in ax.cnf. With -print it only
+// writes the report to standard output, for those extensions.
 func (a *app) sync(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("ax sync", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	summarise := fs.Bool("s", false, "summarise the report with the summary model")
 	fs.BoolVar(summarise, "summarise", false, "alias for -s")
 	refresh := fs.Bool("refresh", false, "fetch the model catalogue again instead of using the cached copy")
-	yes := fs.Bool("y", false, "accept defaults without prompting")
+	yes := fs.Bool("y", false, "accept defaults without prompting, and install or replace a harness extension without asking")
 	file := fs.String("file", "", "context file to update, relative to the project (remembered)")
-	agent := fs.String("agent", "", "agent whose context file to update: "+agentChoices()+" (remembered)")
+	agent := fs.String("agent", "", "agent to keep current: "+agentChoices()+" (remembered)")
+	global := fs.Bool("global", false, "install the "+harnessNames()+" extension for every project (remembered)")
+	local := fs.Bool("project", false, "install the "+harnessNames()+" extension in this project, the default (remembered)")
+	print := fs.Bool("print", false, "write the report for this project to standard output and change nothing; the "+harnessNames()+" extensions run this")
+	model := fs.String("model", "", "with -print, the model the harness is running as provider/id; its knowledge cutoff is used when OpenRouter publishes it")
 	fs.Usage = func() {
-		fmt.Fprintln(a.stderr, "usage: ax sync [-s] [-refresh] [-y] [-file path | -agent name] [model | date]")
+		fmt.Fprintln(a.stderr, "usage: ax sync [-s] [-refresh] [-y] [-file path | -agent name [-global | -project]] [model | date]")
+		fmt.Fprintln(a.stderr, "       ax sync -print [-s] [-refresh] [-model provider/id]")
 		fs.PrintDefaults()
-		fmt.Fprintln(a.stderr, "The model (its knowledge cutoff) or date and the file are asked for once per project and stored in ax.cnf; later runs take no arguments. A model or date given again replaces the stored one.")
+		fmt.Fprintln(a.stderr, "The model (its knowledge cutoff) or date and the agent are asked for once per project and stored in ax.cnf; later runs take no arguments. A model or date given again replaces the stored one. For "+harnessNames()+" an extension is installed, after asking, that adds the report to the system prompt as the agent starts.")
 	}
 	rest, err := parseInterleaved(fs, args)
 	if err != nil {
@@ -94,6 +112,12 @@ func (a *app) sync(ctx context.Context, args []string) error {
 	if *file != "" && *agent != "" {
 		return errors.New("sync: -file and -agent are mutually exclusive")
 	}
+	if *global && *local {
+		return errors.New("sync: -global and -project are mutually exclusive")
+	}
+	if *model != "" && !*print {
+		return errors.New("sync: -model goes with -print; give the model to report since as the argument")
+	}
 
 	cfg, err := config.LoadUser(a.configPath)
 	if err != nil {
@@ -102,6 +126,12 @@ func (a *app) sync(ctx context.Context, args []string) error {
 	project, err := filepath.Abs(a.dir)
 	if err != nil {
 		return err
+	}
+	if *print {
+		if len(rest) > 0 || *file != "" || *agent != "" || *global || *local {
+			return errors.New("sync: -print takes only -s, -refresh and -model")
+		}
+		return a.syncPrint(ctx, cfg, project, *model, *summarise, *refresh)
 	}
 	entry := cfg.Sync.Projects[project]
 	before := entry
@@ -133,34 +163,70 @@ func (a *app) sync(ctx context.Context, args []string) error {
 		entry.Model, entry.Since = cutoff, ""
 	}
 
-	// The file: the flag, else what this project used before, else the
-	// configured default, else ask.
+	// The target: the flag, else what this project used before, else the
+	// configured default, else ask. A harness gets an extension, anything
+	// else a context file.
 	target := *file
+	var h harness
+	isHarness := false
 	if *agent != "" {
-		target = agentFile(*agent)
-		if target == *agent {
-			return fmt.Errorf("sync: unknown agent %q; one of %s, or use -file", *agent, agentChoices())
+		if h, isHarness = findHarness(*agent); !isHarness {
+			target = agentFile(*agent)
+			if target == *agent {
+				return fmt.Errorf("sync: unknown agent %q; one of %s, or use -file", *agent, agentChoices())
+			}
 		}
 	}
-	if target == "" {
-		target = entry.File
-	}
-	if target == "" {
-		target = cfg.Sync.File
-	}
-	if target == "" && p.ask {
-		answer, err := p.text("Agent context file to update ("+agentChoices()+", or a path)", "claude")
-		if err != nil {
-			return err
+	if target == "" && !isHarness {
+		switch {
+		case entry.Harness != "":
+			h, isHarness = findHarness(entry.Harness)
+		case entry.File != "":
+			target = entry.File
+		case cfg.Sync.Harness != "":
+			h, isHarness = findHarness(cfg.Sync.Harness)
+		case cfg.Sync.File != "":
+			target = cfg.Sync.File
+		case p.ask:
+			answer, err := p.text("Agent to keep current ("+agentChoices()+", or a path)", "claude")
+			if err != nil {
+				return err
+			}
+			answer = strings.TrimSpace(answer)
+			if h, isHarness = findHarness(answer); !isHarness {
+				target = agentFile(answer)
+			}
 		}
-		target = agentFile(strings.TrimSpace(answer))
 	}
-	if target == "" {
-		return fmt.Errorf("sync: no context file for %s; give -agent (%s) or -file, or set sync.file in %s", project, agentChoices(), a.configPath)
+	if (*global || *local) && !isHarness {
+		return fmt.Errorf("sync: -global and -project choose where the %s extension goes; they do not apply to a context file", harnessNames())
 	}
-	entry.File = target
+	if target == "" && !isHarness {
+		return fmt.Errorf("sync: no context file for %s; give -agent (%s) or -file, or set sync.file or sync.harness in %s", project, agentChoices(), a.configPath)
+	}
+	if isHarness {
+		entry.File, entry.Harness = "", h.name
+		switch {
+		case *global:
+			entry.Global = true
+		case *local:
+			entry.Global = false
+		case before.Harness == h.name:
+			// Where it went last time.
+		default:
+			entry.Global, err = a.askScope(h, p)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		entry.File, entry.Harness, entry.Global = target, "", false
+	}
 
-	if entry != before {
+	remember := func() error {
+		if entry == before {
+			return nil
+		}
 		if cfg.Sync.Projects == nil {
 			cfg.Sync.Projects = map[string]config.SyncProject{}
 		}
@@ -169,13 +235,24 @@ func (a *app) sync(ctx context.Context, args []string) error {
 			return fmt.Errorf("remembering the sync settings: %w", err)
 		}
 		a.logf("remembered sync settings for %s in %s", project, a.configPath)
+		return nil
 	}
 
-	path := target
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(project, path)
+	var path string
+	if isHarness {
+		if path, err = h.path(project, entry.Global); err != nil {
+			return err
+		}
+	} else {
+		if err := remember(); err != nil {
+			return err
+		}
+		path = target
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(project, path)
+		}
+		a.warnIfCommitted(ctx, path)
 	}
-	a.warnIfCommitted(ctx, path)
 
 	var since time.Time
 	if entry.Since != "" {
@@ -187,10 +264,32 @@ func (a *app) sync(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	source := "since " + since.Format("2006-01-02")
+	if entry.Model != "" {
+		source = "since the knowledge cutoff of " + entry.Model + ", " + since.Format("2006-01-02")
+	}
+
+	if isHarness {
+		// The report is rendered above only to check that the extension
+		// will have something to say; it renders its own each session.
+		ok, err := a.installHarness(ctx, h, path, entry.Global, *yes, p)
+		if err != nil || !ok {
+			return err
+		}
+		if err := remember(); err != nil {
+			return err
+		}
+		if md == "" {
+			a.warnf("there are no axiom changes for %s yet (%s); %s will add them once there are", project, source, h.name)
+			return nil
+		}
+		fmt.Fprintf(a.stderr, "ax: %s will add %d lines of axiom changes to its system prompt (%s, or since the cutoff of its active model when OpenRouter publishes it)\n", h.name, strings.Count(md, "\n"), source)
+		return nil
+	}
+
 	if md == "" {
 		return fmt.Errorf("sync: nothing to write for %s", project)
 	}
-
 	existing, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -206,12 +305,33 @@ func (a *app) sync(ctx context.Context, args []string) error {
 	if replaced {
 		verb = "replaced the axiom changes in"
 	}
-	source := "since " + since.Format("2006-01-02")
-	if entry.Model != "" {
-		source = "since the knowledge cutoff of " + entry.Model + ", " + since.Format("2006-01-02")
-	}
 	fmt.Fprintf(a.stderr, "ax: %s %s (%s)\n", verb, shortenFrom(a.dir, path), source)
 	return nil
+}
+
+// askScope asks whether the harness extension goes in the project or in
+// the user's configuration for every project. A global copy already in
+// place answers it: a project copy would only duplicate it.
+func (a *app) askScope(h harness, p prompter) (bool, error) {
+	if gp, err := h.global(); err == nil {
+		if _, err := os.Stat(gp); err == nil {
+			fmt.Fprintf(a.stderr, "ax: the global %s %s at %s already serves this project\n", h.name, h.kind, shorten(gp))
+			return true, nil
+		}
+	}
+	for {
+		answer, err := p.text(fmt.Sprintf("Install the %s %s for this project or for every project (project, global)", h.name, h.kind), "project")
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "p", "project":
+			return false, nil
+		case "g", "global":
+			return true, nil
+		}
+		fmt.Fprintln(p.out, "Please answer project or global.")
+	}
 }
 
 // spliceSync replaces the block between SyncHeader and SyncFooter in doc

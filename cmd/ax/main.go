@@ -90,14 +90,21 @@ Commands:
             rest; -force replaces it.
   setup     Write ax.cnf interactively and test the configured models, or
             update an existing one: value flags change only the fields
-            they name, and the prompts offer the current values.
+            they name, and the prompts offer the current values. It also
+            asks which agent ax sync serves by default and, for pi or
+            opencode, offers to install the extension for every project.
   sync      Write the output of since or for into an agent context file in
             this project (CLAUDE.local.md for claude, or any file given),
             between a "# Axiom changes" heading and an
             "**end of axiom changes**" line. The model or date and the
             file are asked once and remembered per project in ax.cnf,
             whose sync section can also hold defaults for new projects.
-            A file that git would commit draws a warning.
+            A file that git would commit draws a warning. For pi and
+            opencode it installs, after asking, an extension in the
+            project (or with -global, for every project) that runs
+            ax sync -print as the agent starts and adds the report to
+            its system prompt, using the active model's cutoff when
+            OpenRouter publishes it.
 
 Global flags:
 `

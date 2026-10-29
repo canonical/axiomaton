@@ -238,6 +238,15 @@ works. Every answer has a flag (`-base-url`, `-key` or `-key-env`,
 `-y` accepts the defaults without prompting and `-no-check` skips the
 connectivity test.
 
+Setup then asks which agent harness `ax sync` should serve by default
+(`-harness claude`, `codex`, `gemini`, `copilot`, `pi` or `opencode`),
+which sets `sync.file` or `sync.harness`, and the default model or date
+for new projects (`-sync-cutoff`), which sets `sync.model` or
+`sync.since`. For pi and opencode it offers to install the
+[extension](#harness-extensions) for every project; `-global-extension`
+installs it without asking, and `-y` alone never does. The context-file
+agents have no global form, so for them nothing is installed.
+
 An existing `ax.cnf` is updated rather than replaced: on a terminal, after
 a confirmation, the prompts offer its current values (`-force` skips the
 confirmation); any value flag turns the run into a targeted update that
@@ -284,6 +293,7 @@ proxy:
     max-object-mb: 1024
 sync:
     file: "CLAUDE.local.md"  # defaults for ax sync in projects it has not seen
+    harness: ""  # or an extension for pi or opencode instead of a file
     model: "openai/gpt-6-luna-pro"  # or since: "2025-06-01"
     projects: {}  # filled in by ax sync, one entry per project
 consent:
@@ -322,7 +332,8 @@ later run is just `ax sync`:
 - which file to write: `-agent claude` (CLAUDE.local.md), `codex`
   (AGENTS.override.md), `gemini` (GEMINI.md), `copilot`
   (.github/copilot-instructions.md), or `-file <path>` relative to the
-  project.
+  project; or, with `-agent pi` or `-agent opencode`, an extension to
+  install (see [Harness extensions](#harness-extensions)).
 
 The report goes between a `# Axiom changes` heading and an
 `**end of axiom changes**` line; anything else in the file is left alone,
@@ -335,17 +346,55 @@ already tracked by git, and says what to add to `.gitignore`. The file is
 written either way; `.gitignore` is never edited. Files outside any
 repository need nothing.
 
-`sync.file`, `sync.model` or `sync.since` in `ax.cnf` set defaults for
-projects that have never been synced, so a user who always works with the
-same agent and model never gets asked:
+`sync.file` (or `sync.harness`), `sync.model` or `sync.since` in `ax.cnf`
+set defaults for projects that have never been synced, so a user who
+always works with the same agent and model never gets asked. `ax setup`
+asks for them:
 
 ```
 sync:
-    file: "CLAUDE.local.md"
+    file: "CLAUDE.local.md"  # or harness: "pi"
     model: "openai/gpt-6-luna-pro"  # or since: "2025-06-01"
     projects:
         "/home/me/src/juju": {file: "CLAUDE.local.md", since: "2025-06-01"}
+        "/home/me/src/pebble": {harness: "opencode", global: true, model: "openai/gpt-6-luna-pro"}
 ```
+
+### Harness extensions
+
+pi and opencode load code into the agent, so for them `ax sync -agent pi`
+or `-agent opencode` installs an extension instead of writing a file:
+
+| Harness | Project | Global | Hook |
+| --- | --- | --- | --- |
+| pi | `.pi/extensions/axiomaton.ts` | `~/.pi/agent/extensions/axiomaton.ts` (`$PI_CODING_AGENT_DIR`) | `before_agent_start`, as the `axiom-changes` prompt section |
+| opencode | `.opencode/plugins/axiomaton.ts` | `$XDG_CONFIG_HOME/opencode/plugins/axiomaton.ts` | `experimental.chat.system.transform` |
+
+The extension runs `ax sync -print -model <provider>/<id>` in the agent's
+working directory, once per model per session, and adds what it prints to
+the system prompt. `-print` never prompts or writes. It places the model
+the agent reports in the OpenRouter catalogue (directly for the openrouter
+provider, otherwise by vendor and a normalised id, so
+`anthropic/claude-sonnet-4-5-20250929` finds `anthropic/claude-sonnet-4.5`)
+and uses its published or stored cutoff; it never estimates one or starts
+an agent to find it. When the model cannot be placed, it reports since what
+`ax sync` remembered for the nearest synced directory at or above the
+working directory, then the `sync` defaults; with none of those it prints
+nothing. A failure is shown once as a warning in pi and logged in opencode;
+the agent carries on without the report.
+
+Installing asks first, as does replacing an extension that differs from
+the one this `ax` would write; `-y` answers yes, and without a terminal or
+`-y` the install fails. Later runs only check that the extension is
+current. `-project` or `-global` picks the location (remembered); without
+either, a global copy already present serves the project, and otherwise
+`ax sync` asks, defaulting to the project. A project copy gets the same git
+warning as a context file, and pi loads it only once the project is
+trusted. If both copies are present, the first to add the report wins.
+
+The extension runs `ax` from `PATH`, or the absolute path of the `ax` that
+installed it when there is none on `PATH`; `AXIOMATON_AX` in the agent's
+environment overrides both.
 
 ## Updating logs with agents
 

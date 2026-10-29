@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/canonical/go-cnf/cnfast"
@@ -143,11 +144,13 @@ func Render(u User, now time.Time) ([]byte, error) {
 	file := Pair("file", Str(u.Sync.File), "context file relative to the project, e.g. CLAUDE.local.md")
 	file.PreCmt = Lines(
 		"ax sync writes the changes since a cutoff into an agent context file",
-		"in the project. Defaults for projects it has not seen; each project's",
-		"own answers are remembered under projects.",
+		"in the project, or installs an extension for a harness that fetches",
+		"them. Defaults for projects it has not seen; each project's own",
+		"answers are remembered under projects.",
 	)
 	sync := BlockMap(
 		file,
+		Pair("harness", Str(u.Sync.Harness), "or a harness extension instead of a file: "+strings.Join(Harnesses, ", ")),
 		Pair("model", Str(u.Sync.Model), "report since this model's knowledge cutoff, or"),
 		Pair("since", Str(u.Sync.Since), "since this date (YYYY-MM-DD)"),
 	)
@@ -163,6 +166,12 @@ func Render(u User, now time.Time) ([]byte, error) {
 			m := InlineMap()
 			if p.File != "" {
 				m.Items = append(m.Items, Pair("file", Str(p.File), ""))
+			}
+			if p.Harness != "" {
+				m.Items = append(m.Items, Pair("harness", Str(p.Harness), ""))
+			}
+			if p.Global {
+				m.Items = append(m.Items, Pair("global", Bool(true), ""))
 			}
 			if p.Model != "" {
 				m.Items = append(m.Items, Pair("model", Str(p.Model), ""))
