@@ -107,8 +107,12 @@ jobs:
       - name: Gather results
         env:
           LOG: ${{ matrix.log }}
+          SLUG: ${{ matrix.slug }}
         run: |
-          out="$RUNNER_TEMP/out"
+          # The artifact holds its own result-<slug> directory, so the
+          # layout after a merged download does not depend on how many
+          # subjects ran.
+          out="$RUNNER_TEMP/out/result-$SLUG"
           mkdir -p "$out"
           git diff -- "$LOG" >"$out/axiomlog.patch"
           if [ -f "$LOG.pending" ]; then cp "$LOG.pending" "$out/pending.jsonl"; fi
@@ -143,6 +147,7 @@ jobs:
         with:
           pattern: result-*
           path: ${{ runner.temp }}/results
+          merge-multiple: true
       - name: Apply results
         env:
           MATRIX: ${{ needs.detect.outputs.matrix }}

@@ -31,6 +31,7 @@ while read -r entry; do
 	dir="$results/result-$slug"
 	if [[ ! -f $dir/result.json ]]; then
 		rows+="| \`$subject\` | $have → $latest | failed, see the run log | | |"$'\n'
+		echo "::warning::no results for $subject in $results; its update job failed or uploaded nothing"
 		failed=$((failed + 1))
 		continue
 	fi
