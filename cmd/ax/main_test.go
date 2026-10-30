@@ -28,6 +28,19 @@ import (
 	"github.com/canonical/axiomaton/internal/subjects"
 )
 
+// TestIsTerminalDevNull guards against treating any character device as
+// a terminal: stdin from /dev/null, as in CI, must not start a review.
+func TestIsTerminalDevNull(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Skip(err)
+	}
+	defer f.Close()
+	if isTerminal(f) {
+		t.Fatalf("isTerminal(%s) = true", os.DevNull)
+	}
+}
+
 func TestParseInterleaved(t *testing.T) {
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	s := fs.Bool("s", false, "")

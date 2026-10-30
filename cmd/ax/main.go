@@ -30,6 +30,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/canonical/axiomaton/internal/axiom"
 	"github.com/canonical/axiomaton/internal/axiomlog"
 	"github.com/canonical/axiomaton/internal/config"
@@ -886,10 +888,8 @@ func sortStrings(s []string) {
 	}
 }
 
+// isTerminal reports whether f is a terminal. A character device is not
+// enough: /dev/null is one, and a run with stdin from it must not prompt.
 func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }

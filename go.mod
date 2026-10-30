@@ -7,6 +7,7 @@ require (
 	github.com/microsoft/agent-framework-go v0.2.0
 	github.com/openai/openai-go/v3 v3.79.0
 	golang.org/x/mod v0.42.0
+	golang.org/x/term v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -21,4 +22,5 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 )
