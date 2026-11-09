@@ -8,5 +8,7 @@
   "go:golang.org/x/sync": "0.24.0",
   "go:golang.org/x/term": "0.47.0",
   "go:golang.org/x/tools": "0.52.0",
-  "go:golang.org/x/net": "0.62.0"
+  "go:golang.org/x/net": "0.62.0",
+  "zig": "0.17.1",
+  "go:golang.org/x/exp": "0.0.0-20261106192419-47ce03d25ef0"
 }
